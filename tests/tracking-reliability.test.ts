@@ -42,17 +42,17 @@ test('changing accepted marker sets and resolution does not toggle valid trackin
  const tracking=new TrackingState();for(const [i,ids] of [[0,1,2],[0,1,2,3,4],[1,2,4],[0,2,3,5,7],[5,6,7]].entries()){const fit=fitMarkers(make(ids),{width:1280,height:720});assert.ok(fit.count>=3);assert.deepEqual(tracking.accept(i*100,i*100+180),{phase:'locked',stampable:true});}
 });
 test('capture processing latency does not consume the dropout recovery window',()=>{
- const tracking=new TrackingState();tracking.accept(0,280);assert.deepEqual(tracking.reject('insufficient-markers',370),{phase:'holding',stampable:false});assert.equal(tracking.read(900).phase,'holding');assert.equal(tracking.read(281+RECOVERY_HOLD).phase,'lost');assert.equal(tracking.lastRejection,'insufficient-markers');
+ const tracking=new TrackingState();tracking.accept(0,280);assert.deepEqual(tracking.reject('insufficient-markers',370),{phase:'holding',stampable:true});assert.equal(tracking.read(900).phase,'holding');assert.equal(tracking.read(281+RECOVERY_HOLD).phase,'lost');assert.equal(tracking.lastRejection,'insufficient-markers');
 });
-test('alternating short failures never report LOST or stamp a held transform',()=>{
- const tracking=new TrackingState();for(let i=0;i<20;i++){const at=i*180;assert.equal(tracking.accept(at,at+80).phase,'locked');assert.deepEqual(tracking.reject('poor-homography',at+150),{phase:'holding',stampable:false});}assert.equal(tracking.read(5000).phase,'lost');
+test('alternating short failures retain the bounded stampable held transform',()=>{
+ const tracking=new TrackingState();for(let i=0;i<20;i++){const at=i*180;assert.equal(tracking.accept(at,at+80).phase,'locked');assert.deepEqual(tracking.reject('poor-homography',at+150),{phase:'holding',stampable:true});}assert.equal(tracking.read(5000).phase,'lost');
 });
 test('genuine dropout, stale frames and orientation resets disable stamping',()=>{
- const tracking=new TrackingState();tracking.accept(100,180);assert.equal(tracking.read(451).stampable,false);tracking.reject('no-markers',500);assert.equal(tracking.read(900).phase,'lost');assert.equal(tracking.accept(100,1000).stampable,false);assert.equal(tracking.reason,'stale-frame');assert.equal(tracking.accept(1000,1100).phase,'locked');assert.equal(tracking.reject('view-changed',1101,true).phase,'lost');
+ const tracking=new TrackingState();tracking.accept(100,180);assert.equal(tracking.read(451).stampable,true);tracking.reject('no-markers',500);assert.equal(tracking.read(1181).phase,'lost');assert.equal(tracking.accept(100,1250).stampable,false);assert.equal(tracking.reason,'stale-frame');assert.equal(tracking.accept(1300,1400).phase,'locked');assert.equal(tracking.reject('view-changed',1401,true).phase,'lost');
 });
 
 test('portrait detector frames have the same pixel budget as landscape and remain uncropped',()=>{assert.deepEqual(processingFrame(3840,2160,1280),{width:1280,height:720});assert.deepEqual(processingFrame(2160,3840,1280),{width:720,height:1280});assert.deepEqual(processingFrame(2160,3840,1920),{width:1080,height:1920});assert.deepEqual(processingFrame(640,480,1280),{width:640,height:480});});
 
 test('adaptive budget accounts for capture age across TWO processing intervals',()=>{assert.equal(processingBudget(1280,200,false),960);assert.equal(processingBudget(1920,220,false),1280);assert.equal(processingBudget(1280,100,true),1280);assert.equal(processingBudget(1280,50,true),1920);assert.equal(processingBudget(1280,50,false),1280);assert.equal(processingBudget(960,210,true),960);
- const state=new TrackingState(),latency=200;state.accept(0,latency);assert.equal(state.read(2*latency+FRAME_PAUSE-1).stampable,false);const faster=latency*(960/1280)**2;state.accept(1000,1000+faster);assert.equal(state.read(1000+2*faster+FRAME_PAUSE-1).stampable,true);
+ const state=new TrackingState(),latency=200;state.accept(0,latency);assert.equal(state.read(2*latency+FRAME_PAUSE-1).phase,'holding');const faster=latency*(960/1280)**2;state.accept(1000,1000+faster);assert.equal(state.read(1000+2*faster+FRAME_PAUSE-1).stampable,true);
 });

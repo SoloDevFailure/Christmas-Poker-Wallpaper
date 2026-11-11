@@ -19,7 +19,7 @@ type Pose = {
 };
 type Props = {
     placement: Placement;
-    onPlacement: (p: Placement | null, at?: number) => void;
+    onPlacement: (p: Placement | null, at?: number, validUntil?:number) => void;
     onStatus: (s: string) => void;
     debug: boolean;
     trackingDebug:boolean;
@@ -33,6 +33,7 @@ type Props = {
 export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
     const video = useRef<HTMLVideoElement>(null), view = useRef<HTMLDivElement>(null), latest = useRef(props);
     latest.current = props;
+    const tracking=useRef(new TrackingState()).current,lastReliable=useRef<Placement|null>(null),needsRebase=useRef(false);
     const artwork = useRef(props.placement), anchored = useRef(true), poseRef = useRef<Pose | null>(null), live = useRef(false), epoch = useRef(0);
     artwork.current = { ...artwork.current, ...stampAsset(props.placement) };
     const pointers = useRef(new Map<number, Point>()), gesture = useRef<Gesture | null>(null);
@@ -44,7 +45,13 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
     const zoomRef=useRef<1|2>(2);
     const phoneControls=useRef({size:.56,rotation:0}),phoneGesture=useRef<{base:{size:number;rotation:number};points:Point[]}|null>(null),precision=useRef<ScreenStamp|null>(null);
     function cancelPrecision(){precision.current=null;latest.current.onPrecisionChange(false);}
-    function sample(){const p=poseRef.current;return p&&live.current&&performance.now()-p.at<=MAX_TRACKING_AGE&&validPlacement(artwork.current)?{placement:{...artwork.current},at:p.at}:null;}
+    function frozenPlacement(){
+        const p=lastReliable.current;if(!p)return null;
+        const asset=stampAsset(latest.current.placement);
+        if(!Object.entries(asset).every(([key,value])=>p[key as keyof Placement]===value))lastReliable.current={...p,...asset};
+        return lastReliable.current;
+    }
+    function sample(){const p=poseRef.current,frozen=frozenPlacement();return p&&frozen&&tracking.read(performance.now()).stampable&&validPlacement(frozen)?{placement:{...frozen},at:p.at,validUntil:tracking.validUntil}:null;}
     useImperativeHandle(ref,()=>({sample,beginPrecision(){const p=poseRef.current;if(latest.current.mode!=='legacy'||!p||!sample())return false;precision.current=screenStampFromWorld(artwork.current,p.inverse,viewport(p));pointers.current.clear();gesture.current=null;latest.current.onPrecisionChange(true);return true;},endPrecision(){const result=precision.current?sample():null;cancelPrecision();return result;},cancelPrecision}));
     function phoneScreen(p:Pose):ScreenStamp {const v=viewport(p);return {centre:{x:v.width/2,y:v.height/2},size:phoneControls.current.size*phoneReference(v,zoomRef.current),rotation:phoneControls.current.rotation};}
     function updatePhone(p:Pose){return phoneFixedPlacement(artwork.current,p.h,viewport(p),precision.current||phoneScreen(p));}
@@ -56,15 +63,15 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
             latest.current.onMetrics({ ...metrics, x: overlay.position_x, y: overlay.position_y, scale: overlay.scale, rotation: overlay.rotation, mode: precision.current ? 'precision hold' : props.mode, lastRejectedMarkers:props.trackingDebug?debugSnapshot.current.lastFailure?.markers.map(({id,status,reason,residual})=>({id,status,reason,residual})):undefined, markerDecisions:props.trackingDebug?frameMarkerDecisions(debugSnapshot.current.markers,debugSnapshot.current.acceptedIds,debugSnapshot.current.reason).map(({id,status,reason,residual})=>({id,status,reason,residual})):undefined });
     }, [props.debug, metrics, overlay]);
     const publishRef = useRef<(p: Placement, at: number) => void>(() => { });
-    publishRef.current = (p, at) => { artwork.current = p; setOverlay(p); latest.current.onPlacement(validPlacement(p) ? p : null, at); };
+    publishRef.current = (p, at) => { artwork.current = p; if(live.current)lastReliable.current={...p};setOverlay(p); latest.current.onPlacement(validPlacement(p) ? p : null, at, tracking.validUntil); };
     function viewport(p: Pose) { const box = view.current!.getBoundingClientRect(); return videoViewport(box.width, box.height, p.width, p.height,'contain',zoomRef.current); }
     function worldPoints(p: Pose) { const vp = viewport(p); return [...pointers.current.values()].slice(0, 2).map(q => project(p.h, viewToImage(q, vp))); }
     function rebase() {
         const p = poseRef.current;
-        if (p && live.current)
+        if (p && live.current&&tracking.read(performance.now()).phase==='locked')
             gesture.current = { placement: { ...artwork.current }, points: worldPoints(p) };
-        else
-            gesture.current = null;
+        else if(tracking.read(performance.now()).phase==='lost')gesture.current=null;
+        else needsRebase.current=true;
     }
     useEffect(() => {
         if (previousReset.current !== props.aimReset) {
@@ -78,20 +85,30 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
         let terminalError: string | null = null;
         let stopped = false, stream: MediaStream | undefined, worker: Worker | undefined, timer: ReturnType<typeof setTimeout>, watchdog: ReturnType<typeof setInterval>, last = performance.now();
         const canvas = document.createElement('canvas'), ctx = canvas.getContext('2d', { willReadFrequently: true });
-        const report = (text: string, kind: string) => { setStatus(text); setPhase(kind); latest.current.onStatus(text); };
-        const tracking=new TrackingState();
+        let badgeTimer:ReturnType<typeof setTimeout>|undefined,badgeHeld=false;
+        // Cosmetic debounce only: grace/frozen placement take effect immediately.
+        const report = (text:string,kind:string)=>{
+            if(kind==='holding'){if(!badgeHeld){badgeHeld=true;badgeTimer=setTimeout(()=>{setStatus(text);setPhase(kind);latest.current.onStatus(text);},120);}return;}
+            clearTimeout(badgeTimer);badgeHeld=false;setStatus(text);setPhase(kind);latest.current.onStatus(text);
+        };
         let lastRejection='',lastFrame:Record<string,unknown>={},reportedPhase='lost';
         let lastValidAt:number|null=null,rejectionDetail='';
-        function diagnostics(){const state=tracking.read(performance.now());if(latest.current.trackingDebug){debugSnapshot.current={...debugSnapshot.current,phase:state.phase,reason:tracking.reason,detail:rejectionDetail,lastValidAt,acceptedIds:state.stampable?(poseRef.current?.ids||[]):[]};}setMetrics({...lastFrame,state:state.phase,rejection:tracking.reason,lastRejection,stampable:state.stampable&&validPlacement(artwork.current),placementValid:validPlacement(artwork.current)});}
+        function diagnostics(){const state=tracking.read(performance.now());if(latest.current.trackingDebug){debugSnapshot.current={...debugSnapshot.current,phase:state.phase,reason:tracking.reason,detail:rejectionDetail,lastValidAt,lastValidIds:poseRef.current?.ids||[],acceptedIds:state.phase==='locked'?(poseRef.current?.ids||[]):[]};}setMetrics({...lastFrame,state:state.phase,rejection:tracking.reason,lastRejection,stampable:state.stampable&&validPlacement(artwork.current),placementValid:validPlacement(artwork.current)});}
         const invalidate = (text: string,reason='temporary-dropout',immediate=false) => {
             const state=tracking.reject(reason,performance.now(),immediate);
             lastRejection=text+' ('+reason+')';rejectionDetail=text;
             if(latest.current.trackingDebug)debugSnapshot.current={...debugSnapshot.current,lastFailure:{at:performance.now(),reason:lastRejection,markers:frameMarkerDecisions(debugSnapshot.current.markers,[],reason)}};
-            live.current=false;cancelPrecision();latest.current.onPlacement(null);
+            live.current=false;
+            if(state.phase==='holding'){
+                needsRebase.current=true;
+                const frozen=frozenPlacement();
+                if(frozen)publishRef.current(frozen,poseRef.current!.at);
+                setPose(poseRef.current);report('HELD · last reliable position', 'holding');
+            }else{
+                cancelPrecision();latest.current.onPlacement(null);pointers.current.clear();gesture.current=null;phoneGesture.current=null;needsRebase.current=false;
+                setPose(null);report(lastReliable.current?'LOST · '+text:text,'lost');
+            }
             if(immediate)debugSnapshot.current={...debugSnapshot.current,draw:false,markers:[]};
-            pointers.current.clear();gesture.current=null;
-            setPose(state.phase==='holding'?poseRef.current:null);
-            report(state.phase==='holding'?'Tracking · recovering':text,state.phase);
             reportedPhase=state.phase;diagnostics();
         };
         const resized = () => {
@@ -103,7 +120,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
             const r = view.current?.getBoundingClientRect();
             if (r)
                 setSize({ width: r.width, height: r.height });
-            invalidate('Finding markers…','view-changed',true);
+            invalidate('Finding markers…','view-changed');
         };
         const observer = new ResizeObserver(resized);
         if (view.current)
@@ -134,7 +151,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                     if (stopped)
                         return;
                     if (document.visibilityState !== 'visible' || v.readyState < 2) {
-                        invalidate('Finding markers…','camera-not-ready',true);
+                        invalidate('Waiting for camera frame','camera-not-ready',document.visibilityState!=='visible');
                         timer = setTimeout(frame, 150);
                         return;
                     }
@@ -178,6 +195,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                         const p=smoothTracking(raw,previous,local);
 
                         poseRef.current=p;live.current=true;tracking.accept(p.at,now);lastFrame.accepted=fit.count;lastValidAt=now;rejectionDetail='';
+                        if(needsRebase.current){rebase();phoneGesture.current={base:{...phoneControls.current},points:[...pointers.current.values()]};needsRebase.current=false;}
                         let next=artwork.current;
                         if(latest.current.mode==='camera-stamp'||precision.current)next=updatePhone(p);
                         else if(!anchored.current){const q=project(p.h,{x:p.width*(.5+latest.current.calibration.x),y:p.height*(.5+latest.current.calibration.y)});next={...next,position_x:q.x/W,position_y:q.y/H};anchored.current=true;}
@@ -192,9 +210,9 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                 };
                 watchdog = setInterval(()=>{
                     const state=tracking.read(performance.now());
-                    if(live.current&&!state.stampable){invalidate('Waiting for a fresh camera solution','stale-frame');}
-                    else if(!live.current&&state.phase!==reportedPhase){setPose(state.phase==='holding'?poseRef.current:null);report(state.phase==='holding'?'Tracking · recovering':'Tracking lost · show 3 markers',state.phase);reportedPhase=state.phase;diagnostics();}
-                },60);
+                    if(live.current&&state.phase!=='locked')invalidate('Show at least 3 markers','stale-frame');
+                    else if(!live.current&&state.phase!==reportedPhase)invalidate('Tracking lost · show 3 markers',tracking.reason||'tracking-timeout');
+                },40);
                 frame();
             }
             catch (e) {
@@ -207,7 +225,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
             }
         }
         void start();
-        return () => { stopped = true; observer.disconnect(); document.removeEventListener('visibilitychange', visibility); clearTimeout(timer); clearInterval(watchdog); worker?.terminate(); stream?.getTracks().forEach(t => t.stop()); live.current = false; latest.current.onPlacement(null); };
+        return () => { stopped = true; observer.disconnect(); document.removeEventListener('visibilitychange', visibility); clearTimeout(timer); clearTimeout(badgeTimer); clearInterval(watchdog); worker?.terminate(); stream?.getTracks().forEach(t => t.stop()); live.current = false; latest.current.onPlacement(null); };
     }, []);
     function toggleDisplayZoom() {
         // Freeze the current wallpaper transform, never scale the stamp itself.
@@ -222,7 +240,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
     function location(e: PointerEvent<HTMLDivElement>): Point { const r = e.currentTarget.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
     function down(e: PointerEvent<HTMLDivElement>) {
         const p = poseRef.current;
-        if (props.disabled || precision.current || !p || !live.current || performance.now() - p.at > MAX_TRACKING_AGE || !onVideo(location(e), viewport(p)) || pointers.current.size >= 2)
+        if (props.disabled || precision.current || !p || !tracking.read(performance.now()).stampable || !onVideo(location(e), viewport(p)) || pointers.current.size >= 2)
             return;
         e.preventDefault();
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -237,8 +255,9 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
         e.preventDefault();
         pointers.current.set(e.pointerId, location(e));
         const p = poseRef.current;
-        if (!p || !live.current || precision.current || !gesture.current)
-            return;
+        if (!p || precision.current)return;
+        if(!live.current||tracking.read(performance.now()).phase!=='locked'){needsRebase.current=true;return;}
+        if(!gesture.current)return;
         if(props.mode==='camera-stamp'){const g=phoneGesture.current;if(g)phoneControls.current=resizePhoneStamp(g.base,g.points,[...pointers.current.values()]);publishRef.current(updatePhone(p),p.at);}
         else publishRef.current(manipulate(gesture.current, worldPoints(p)), p.at);
     }
@@ -258,9 +277,9 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
     return <>
     <div ref={view} className="camera-view" aria-label="Camera sticker placement" onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onLostPointerCapture={up}>
       <video ref={video} muted playsInline aria-label="Rear camera" style={{transform: 'scale('+displayZoom+')',transformOrigin:'50% 50%'}}/>
-      <img className="camera-stamp" src={stampSource(props.placement)} alt="Selected sticker" style={{ transform, display: transform ? 'block' : 'none', opacity: phase === 'holding' ? .35 : .85 }}/>
+      <img className="camera-stamp" src={stampSource(props.placement)} alt="Selected sticker" style={{ transform, display: transform ? 'block' : 'none', opacity: .85 }}/>
       {crosshair && <span className="crosshair" style={{ left: crosshair.x, top: crosshair.y }}>+</span>}
-      {props.trackingDebug&&<TrackingDebug snapshot={debugView} now={debugNow} width={size.width} height={size.height} zoom={displayZoom}/>}
+      {props.trackingDebug&&<TrackingDebug snapshot={video.current?.videoWidth&&debugView.width&&Math.abs(debugView.width/debugView.height-video.current.videoWidth/video.current.videoHeight)>.01?{...debugView,draw:false}:debugView} now={debugNow} width={size.width} height={size.height} zoom={displayZoom}/>}
     </div>
     <button className="display-zoom" aria-label="Display zoom" aria-pressed={displayZoom===2} title="Relative display zoom; tracking uses the full frame" disabled={props.disabled} onClick={toggleDisplayZoom}>{displayZoom}×</button>
     <p className={'tracking-status ' + phase} role="status">{status}</p>

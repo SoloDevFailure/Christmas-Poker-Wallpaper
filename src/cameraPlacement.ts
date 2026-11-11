@@ -3,7 +3,7 @@ import {imageToView,viewToImage,wrapAngle,type Viewport} from './manipulation';
 import {stampDimensions,type Placement} from './types';
 export type PlacementMode='camera-stamp'|'legacy'|'manual';
 export type ScreenStamp={centre:Point;size:number;rotation:number};
-export type StampSample={placement:Placement;at:number};
+export type StampSample={placement:Placement;at:number;validUntil:number};
 export type CameraHandle={sample:()=>StampSample|null;beginPrecision:()=>boolean;endPrecision:()=>StampSample|null;cancelPrecision:()=>void};
 export function screenStampFromWorld(p:Placement,inverse:number[],v:Viewport):ScreenStamp {
  const c={x:p.position_x*W,y:p.position_y*H},r=p.rotation*Math.PI/180,{width,height}=stampDimensions(p);

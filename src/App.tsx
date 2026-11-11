@@ -7,13 +7,13 @@ import Wallpaper from './Wallpaper';
 import type {StampSample} from './cameraPlacement';
 import { type Placement, type Preview, type Session, type Stamp, validPlacement } from './types';
 import PhoneController from './PhoneController';
-import { MAX_TRACKING_AGE } from './manipulation';
+import {RECOVERY_HOLD,withinTrackingGrace} from './trackingState';
 const initial: Placement = { stamp_type: 'star', position_x: .5, position_y: .5, scale: 160, rotation: 0 };
 export default function App() {
     const phone = location.pathname.replace(/\/$/, '').endsWith('/phone');
     const [code, setCode] = useState(new URLSearchParams(location.search).get('session') || (!phone ? localStorage.getItem('wallpaper-code') || '' : ''));
     const [session, setSession] = useState<Session | null>(null), [user, setUser] = useState(''), [stamps, setStamps] = useState<Stamp[]>([]), [previews, setPreviews] = useState<Record<string, Preview>>({}), [qr, setQr] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false), [online, setOnline] = useState(false), [debug, setDebug] = useState(false), [placement, setPlacement] = useState(initial), [camera, setCamera] = useState(true), [locked, setLocked] = useState(false), [trackingStatus, setTrackingStatus] = useState(''), [notice, setNotice] = useState('');
-    const channel = useRef<RealtimeChannel | null>(null), requestId = useRef<string | null>(null), sending = useRef(false), lastStamp = useRef(0), lastTracking = useRef(0);
+    const channel = useRef<RealtimeChannel | null>(null), requestId = useRef<string | null>(null), sending = useRef(false), lastStamp = useRef(0), placementDeadline = useRef(0);
     const phoneUrl = session ? `${import.meta.env.VITE_PUBLIC_URL?.replace(/\/$/, '') || new URL(import.meta.env.BASE_URL, location.origin).href.replace(/\/$/, '')}/phone/?session=${encodeURIComponent(session.join_code)}` : '';
     async function connect(join?: string) {
         setBusy(true);
@@ -111,7 +111,7 @@ export default function App() {
     function message(e: unknown) { return e instanceof Error ? e.message : typeof e === 'object' && e && 'message' in e ? String(e.message) : String(e); }
     const canPlace = !!session && online && (!phone || !camera || locked) && validPlacement(placement);
     async function preview() {
-        if (!canPlace || camera && performance.now() - lastTracking.current > MAX_TRACKING_AGE)
+        if (!canPlace || camera && !withinTrackingGrace(placementDeadline.current,performance.now()))
             return;
         setError('');
         try {
@@ -126,7 +126,7 @@ export default function App() {
     }
     async function stamp(sample?:StampSample) {
         const submitted=sample?.placement||placement;
-        if (!canPlace || !validPlacement(submitted) || sending.current || performance.now() - lastStamp.current < 1000 || camera && performance.now() - (sample?.at||lastTracking.current) > MAX_TRACKING_AGE)
+        if (!canPlace || !validPlacement(submitted) || sending.current || performance.now() - lastStamp.current < 1000 || camera && !withinTrackingGrace(sample?.validUntil??placementDeadline.current,performance.now()))
             return;
         sending.current = true;
         setBusy(true);
@@ -156,15 +156,15 @@ export default function App() {
         requestId.current = null;
         setNotice('');
     }
-    function cameraPlacement(p: Placement | null, at = performance.now()) {
+    function cameraPlacement(p: Placement | null, at = performance.now(), validUntil=at+RECOVERY_HOLD) {
         if (p) {
-            lastTracking.current = at;
+            placementDeadline.current = validUntil;
             setPlacement(p);
             setLocked(true);
         }
         else {
             setLocked(false);
-            lastTracking.current = 0;
+            placementDeadline.current = 0;
         }
     }
     async function reset() {

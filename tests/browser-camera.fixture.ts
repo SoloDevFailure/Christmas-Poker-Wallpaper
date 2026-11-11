@@ -57,9 +57,9 @@ async function check() {
         visibleCount = 2;
         draw();
         await wait(180);
-        if (!(document.querySelector('.phone-actions button:last-child') as HTMLButtonElement).disabled)
-            throw Error('Stamp remained enabled with two markers');
-        await wait(750);
+        if ((document.querySelector('.phone-actions button:last-child') as HTMLButtonElement).disabled)
+            throw Error('Grace did not keep Stamp enabled');
+        await wait(1100);
         if ((image as HTMLElement).style.display !== 'none')
             throw Error('Stale sticker remained visible');
         visibleCount = 3;
