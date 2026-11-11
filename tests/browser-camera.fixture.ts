@@ -20,6 +20,7 @@ async function check() {
     result.style.cssText = 'position:fixed;bottom:72px;left:12px;z-index:99;background:#111;color:white;font:11px monospace;padding:8px';
     document.body.append(result);
     try {
+        (document.querySelector('button[aria-label="Options"]') as HTMLElement)?.click();await wait(50);
         const mode=document.querySelector('select[aria-label="Placement mode"]') as HTMLSelectElement;if(mode){mode.value='legacy';mode.dispatchEvent(new Event('change',{bubbles:true}));}
         for (let n = 0; n < 150; n++) {
             if (document.querySelector('.tracking-status.locked'))
@@ -58,7 +59,7 @@ async function check() {
         await wait(180);
         if (!(document.querySelector('.phone-actions button:last-child') as HTMLButtonElement).disabled)
             throw Error('Stamp remained enabled with two markers');
-        await wait(350);
+        await wait(750);
         if ((image as HTMLElement).style.display !== 'none')
             throw Error('Stale sticker remained visible');
         visibleCount = 3;

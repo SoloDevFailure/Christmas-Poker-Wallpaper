@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {phoneFixedPlacement,screenStampFromWorld,resizePhoneStamp,smoothTracking,trackingMotion,phoneReference} from '../src/cameraPlacement.ts';
 import {videoViewport,viewToImage} from '../src/manipulation.ts';
-import {project,invertHomography,canvasToPresentation,presentationToCanvas,markers,markerCorners,fitMarkers,wellDistributed,W,H,SIZE,QUIET} from '../src/geometry.ts';
+import {project,invertHomography,canvasToPresentation,presentationToCanvas,markers,markerCorners,fitMarkers,W,H,SIZE,QUIET} from '../src/geometry.ts';
 const base={stamp_type:'star' as const,position_x:.4,position_y:.6,scale:160,rotation:20};
 const close=(a:number,b:number,t=1e-6)=>assert.ok(Math.abs(a-b)<t,a+' != '+b);
 for(const [width,height] of [[390,844],[844,390]])for(const zoom of [1,2] as const)test('phone-centred mapping '+width+'x'+height+' zoom '+zoom,()=>{
@@ -35,12 +35,12 @@ test('presentation inset preserves stored artwork coordinates and marker geometr
  assert.equal(new Set(markers.map(m=>m.id)).size,8);
  for(const m of markers){assert.ok(m.x-QUIET>=0&&m.y-QUIET>=0&&m.x+SIZE+QUIET<=W&&m.y+SIZE+QUIET<=H);const corner=canvasToPresentation(markerCorners(m)[0]);close(corner.x,m.x);close(corner.y,m.y);}
 });
-test('all distributed three-marker combinations recover perspective, collinear sets rejected',()=>{
- const h=[.5,.04,90,.02,.55,40,.00012,.00008],found=markers.map(m=>({id:m.id,corners:markerCorners(m).map(p=>project(h,p))}));let accepted=0,rejected=0;
+test('every three-marker corner combination recovers perspective, including one-edge views',()=>{
+ const h=[.5,.04,90,.02,.55,40,.00012,.00008],found=markers.map(m=>({id:m.id,corners:markerCorners(m).map(p=>project(h,p))}));let accepted=0;
  for(let a=0;a<6;a++)for(let b=a+1;b<7;b++)for(let c=b+1;c<8;c++){
- const indices=[a,b,c];if(!wellDistributed(indices.map(i=>markers[i]))){assert.throws(()=>fitMarkers(indices.map(i=>found[i])));rejected++;continue;}
+ const indices=[a,b,c];
  const fit=fitMarkers(indices.map(i=>found[i]));const q=project(fit.h,project(h,{x:1200,y:800}));close(q.x,1200,.001);close(q.y,800,.001);accepted++;
- }assert.ok(accepted>40&&rejected>=2);assert.equal(fitMarkers(found).count,8);
+ }assert.equal(accepted,56);assert.equal(fitMarkers(found).count,8);
  found[3].corners=found[3].corners.map(p=>({x:p.x+70,y:p.y-35}));assert.equal(fitMarkers(found).count,7);
 });
 test('smoothing reduces subpixel jitter but never lags deliberate movement or stale poses',()=>{

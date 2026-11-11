@@ -82,11 +82,20 @@ function soundQuad(points: Point[]) {
     const cross = points.map((p, i) => { const q = points[(i + 1) % 4], r = points[(i + 2) % 4]; return (q.x - p.x) * (r.y - q.y) - (q.y - p.y) * (r.x - q.x); });
     return cross.every(v => v > 0) && points.every((p, i) => Math.hypot(p.x - points[(i + 1) % 4].x, p.y - points[(i + 1) % 4].y) >= 12);
 }
-export function wellDistributed(points:Point[]) {
- let area=0;for(let a=0;a<points.length-2;a++)for(let b=a+1;b<points.length-1;b++)for(let c=b+1;c<points.length;c++)area=Math.max(area,Math.abs((points[b].x-points[a].x)*(points[c].y-points[a].y)-(points[b].y-points[a].y)*(points[c].x-points[a].x))/2);
- return area>=W*H*.06;
+export type TrackingRejection='insufficient-markers'|'invalid-marker-geometry'|'poor-homography'|'invalid-projection';
+export class TrackingError extends Error {
+ constructor(public reason:TrackingRejection,message:string,public detected:number,public usable:number){super(message);this.name='TrackingError';}
 }
-export function fitMarkers(found: Detection[]) {
+// Corner covariance measures the actual 2D footprint, including each tag's extent.
+// Three tags on one screen edge are not collinear point observations.
+export function usableGeometry(points:Point[]) {
+ const cx=points.reduce((s,p)=>s+p.x,0)/points.length,cy=points.reduce((s,p)=>s+p.y,0)/points.length;
+ let xx=0,xy=0,yy=0;for(const p of points){xx+=(p.x-cx)**2;xy+=(p.x-cx)*(p.y-cy);yy+=(p.y-cy)**2;}
+ const trace=xx+yy;return Number.isFinite(trace)&&trace>0&&(xx*yy-xy*xy)/(trace*trace)>1e-4;
+}
+export function fitMarkers(found: Detection[],frame?:{width:number;height:number;aim?:Point}) {
+    const detected=markers.filter(m=>found.some(f=>f.id===m.id)).length;
+    const tolerance=MAX_REPROJECTION_ERROR*(frame?Math.max(frame.width,frame.height)/1280:1);
     const visible = markers.flatMap(m => {
         const matches = found.filter(f => f.id === m.id);
         // Duplicate IDs are ambiguous, even when one candidate looks plausible.
@@ -94,7 +103,7 @@ export function fitMarkers(found: Detection[]) {
         return matches.length === 1 && soundQuad(matches[0].corners) ? [{ marker: m, camera: matches[0].corners }] : [];
     });
     if (visible.length < 3)
-        throw Error('Three complete markers required');
+        throw new TrackingError(detected<3?'insufficient-markers':'invalid-marker-geometry',detected<3?'Show at least 3 markers':'Detected tags are too small, malformed or ambiguous',detected,visible.length);
     type Group = typeof visible;
     const fit = (group: Group) => {
         const board = group.flatMap(v => markerCorners(v.marker)), camera = group.flatMap(v => v.camera);
@@ -111,23 +120,50 @@ export function fitMarkers(found: Detection[]) {
         error: number;
         ids: number[];
     } | null = null;
+    let projectionRejected=false,geometryRejected=false;
     for (const sample of hypotheses)
         try {
             let model = fit(sample);
-            const inliers = visible.filter(v => model.residual(v) <= MAX_REPROJECTION_ERROR);
-            if (inliers.length < 3 || !wellDistributed(inliers.map(v=>({x:v.marker.x+SIZE/2,y:v.marker.y+SIZE/2}))))
-                continue;
+            let inliers = visible.filter(v => model.residual(v) <= tolerance);
+            if(inliers.length<3)continue;
+            if(!usableGeometry(inliers.flatMap(v=>markerCorners(v.marker)))||!usableGeometry(inliers.flatMap(v=>v.camera))){geometryRejected=true;continue;}
             model = fit(inliers);
+            // Refitting a consensus can push one marginal tag outside the bound.
+            // Trim that genuine outlier and refit instead of discarding the solution.
+            while(inliers.length>3&&inliers.some(v=>model.residual(v)>tolerance)){
+                const worst=inliers.reduce((a,b)=>model.residual(a)>model.residual(b)?a:b);
+                inliers=inliers.filter(v=>v!==worst);model=fit(inliers);
+            }
+            if(!usableGeometry(inliers.flatMap(v=>markerCorners(v.marker)))||!usableGeometry(inliers.flatMap(v=>v.camera)))continue;
             const errors = inliers.map(v => model.rms(v));
-            if (inliers.some(v => model.residual(v) > MAX_REPROJECTION_ERROR))
+            if (inliers.some(v => model.residual(v) > tolerance))
                 continue;
-            if (errors.some(e => !Number.isFinite(e) || e > MAX_REPROJECTION_ERROR))
+            if (errors.some(e => !Number.isFinite(e) || e > tolerance))
                 continue;
-            // Reject a horizon crossing the wallpaper or an implausible folded quad.
-            const board = [{ x: 0, y: 0 }, { x: W, y: 0 }, { x: W, y: H }, { x: 0, y: H }];
-            const denominators = board.map(p => model.inverse[6] * p.x + model.inverse[7] * p.y + 1);
-            if (!denominators.every(v => v > 0) || !soundQuad(board.map(p => project(model.inverse, p))))
-                continue;
+            // Validate the observed footprint and local aiming point. Unseen parts
+            // of a plane may cross the camera horizon during a legitimate close-up.
+            const board=inliers.flatMap(v=>markerCorners(v.marker));
+            const denominators=board.map(p=>model.inverse[6]*p.x+model.inverse[7]*p.y+1);
+            const sign=Math.sign(denominators[0]);
+            if(!denominators.every(v=>Number.isFinite(v)&&v*sign>1e-6))continue;
+            if(frame){
+                const aim=frame.aim||{x:frame.width/2,y:frame.height/2};
+                const radius=Math.max(4,Math.min(frame.width,frame.height)*.015);
+                const local=[{x:aim.x-radius,y:aim.y-radius},{x:aim.x+radius,y:aim.y-radius},{x:aim.x+radius,y:aim.y+radius},{x:aim.x-radius,y:aim.y+radius}];
+                const z=local.map(p=>model.h[6]*p.x+model.h[7]*p.y+1);
+                const points=local.map(p=>project(model.h,p));
+                // Local orientation/convexity, finite coordinates, no horizon near aim.
+                if(!z.every(v=>Number.isFinite(v)&&v*z[0]>0)||points.some(p=>!Number.isFinite(p.x)||!Number.isFinite(p.y))) {projectionRejected=true;continue;}
+                const crosses=points.map((p,i)=>{const q=points[(i+1)%4],r=points[(i+2)%4];return (q.x-p.x)*(r.y-q.y)-(q.y-p.y)*(r.x-q.x);});
+                if(!crosses.every(v=>v>0)){projectionRejected=true;continue;}
+                // A tag-only fit must also predict the aim consistently when any
+                // one tag is omitted. This catches unsafe extrapolation from a
+                // thin close-up footprint without requiring distant screen corners.
+                const centre=project(model.h,aim);
+                const worldPixel= Math.max(...points.map(p=>Math.hypot(p.x-centre.x,p.y-centre.y)))/(radius*Math.SQRT2);
+                const limit=Math.max(6,2*tolerance)*worldPixel;
+                if(inliers.some((_,i)=>{try{const leave=fit(inliers.filter((_,j)=>i!==j)),q=project(leave.h,aim);return Math.hypot(q.x-centre.x,q.y-centre.y)>limit;}catch{return true;}})){projectionRejected=true;continue;}
+            }
             const error = Math.sqrt(errors.reduce((s, e) => s + e * e, 0) / errors.length), ids = inliers.map(v => v.marker.id);
             if (!best || ids.length > best.ids.length || ids.length === best.ids.length && error < best.error)
                 best = { ...model, error, ids };
@@ -135,6 +171,6 @@ export function fitMarkers(found: Detection[]) {
         }
         catch { /* Ignore ill-conditioned hypotheses, never invent a fourth corner. */ }
     if (!best)
-        throw Error('Marker fit is not reliable');
-    return { h: best.h, inverse: best.inverse, error: best.error, ids: best.ids, count: best.ids.length, confidence: best.ids.length >= 4 && best.error < 2 ? 'high' : 'good' };
+        throw new TrackingError(projectionRejected?'invalid-projection':geometryRejected?'invalid-marker-geometry':'poor-homography',projectionRejected?'Aim is outside reliable marker geometry':geometryRejected?'Show markers with more visible corner area':'Marker corners do not agree on a perspective',detected,visible.length);
+    return { h: best.h, inverse: best.inverse, error: best.error, ids: best.ids, count: best.ids.length, usable:visible.length,detected,tolerance,confidence: best.ids.length >= 4 && best.error < tolerance/2 ? 'high' : 'good' };
 }

@@ -1,8 +1,9 @@
 import { forwardRef, useImperativeHandle, useEffect, useRef, useState, type PointerEvent } from 'react';
-import { fitMarkers, homography, markers, project, W, H, type Point } from './geometry';
-import { MAX_TRACKING_AGE, DROPOUT_HOLD, trackingPhase, videoViewport, viewToImage, imageToView, onVideo, manipulate, stickerCorners, type Gesture } from './manipulation';
+import { markerCorners, homography, markers, project, W, H, type Point } from './geometry';
+import { MAX_TRACKING_AGE, videoViewport, viewToImage, imageToView, onVideo, manipulate, stickerCorners, type Gesture } from './manipulation';
 import { validPlacement, stampAsset, type Placement } from './types';
 import { stampSource } from './art';
+import {TrackingState,processingFrame,processingBudget,FRAME_PAUSE} from './trackingState';
 import { phoneFixedPlacement,screenStampFromWorld,resizePhoneStamp,smoothTracking,trackingMotion,phoneReference,type CameraHandle,type ScreenStamp } from './cameraPlacement';
 type Pose = {
     h: number[];
@@ -11,6 +12,7 @@ type Pose = {
     width: number;
     height: number;
     count: number;
+    ids:number[];
     error: number;
 };
 type Props = {
@@ -32,10 +34,10 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
     artwork.current = { ...artwork.current, ...stampAsset(props.placement) };
     const pointers = useRef(new Map<number, Point>()), gesture = useRef<Gesture | null>(null);
     const [pose, setPose] = useState<Pose | null>(null), [overlay, setOverlay] = useState(props.placement), [size, setSize] = useState({ width: 0, height: 0 });
-    const [status, setStatus] = useState('Opening camera…'), [phase, setPhase] = useState('lost'), [metrics, setMetrics] = useState({ resolution: '', fps: 0, detected: 0, used: 0, error: 0 });
-    const [displayZoom,setDisplayZoom]=useState<1|2>(1);
-    const zoomRef=useRef<1|2>(1);
-    const phoneControls=useRef({size:.28,rotation:0}),phoneGesture=useRef<{base:{size:number;rotation:number};points:Point[]}|null>(null),precision=useRef<ScreenStamp|null>(null);
+    const [status, setStatus] = useState('Opening camera…'), [phase, setPhase] = useState('lost'), [metrics, setMetrics] = useState<Record<string,unknown>>({});
+    const [displayZoom,setDisplayZoom]=useState<1|2>(2);
+    const zoomRef=useRef<1|2>(2);
+    const phoneControls=useRef({size:.56,rotation:0}),phoneGesture=useRef<{base:{size:number;rotation:number};points:Point[]}|null>(null),precision=useRef<ScreenStamp|null>(null);
     function cancelPrecision(){precision.current=null;latest.current.onPrecisionChange(false);}
     function sample(){const p=poseRef.current;return p&&live.current&&performance.now()-p.at<=MAX_TRACKING_AGE&&validPlacement(artwork.current)?{placement:{...artwork.current},at:p.at}:null;}
     useImperativeHandle(ref,()=>({sample,beginPrecision(){const p=poseRef.current;if(latest.current.mode!=='legacy'||!p||!sample())return false;precision.current=screenStampFromWorld(artwork.current,p.inverse,viewport(p));pointers.current.clear();gesture.current=null;latest.current.onPrecisionChange(true);return true;},endPrecision(){const result=precision.current?sample():null;cancelPrecision();return result;},cancelPrecision}));
@@ -72,21 +74,17 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
         let stopped = false, stream: MediaStream | undefined, worker: Worker | undefined, timer: ReturnType<typeof setTimeout>, watchdog: ReturnType<typeof setInterval>, last = performance.now();
         const canvas = document.createElement('canvas'), ctx = canvas.getContext('2d', { willReadFrequently: true });
         const report = (text: string, kind: string) => { setStatus(text); setPhase(kind); latest.current.onStatus(text); };
-        const invalidate = (text: string) => {
-            live.current = false;
-            cancelPrecision();
-            latest.current.onPlacement(null);
-            pointers.current.clear();
-            gesture.current = null;
-            const previous = poseRef.current;
-            if (previous && trackingPhase(previous.at, performance.now(), false) === 'holding') {
-                setPose(previous);
-                report('Hold still · reacquiring', 'holding');
-            }
-            else {
-                setPose(null);
-                report(text, 'lost');
-            }
+        const tracking=new TrackingState();
+        let lastRejection='',lastFrame:Record<string,unknown>={},reportedPhase='lost';
+        function diagnostics(){const state=tracking.read(performance.now());setMetrics({...lastFrame,state:state.phase,rejection:tracking.reason,lastRejection,stampable:state.stampable&&validPlacement(artwork.current),placementValid:validPlacement(artwork.current)});}
+        const invalidate = (text: string,reason='temporary-dropout',immediate=false) => {
+            const state=tracking.reject(reason,performance.now(),immediate);
+            lastRejection=text+' ('+reason+')';
+            live.current=false;cancelPrecision();latest.current.onPlacement(null);
+            pointers.current.clear();gesture.current=null;
+            setPose(state.phase==='holding'?poseRef.current:null);
+            report(state.phase==='holding'?'Tracking · recovering':text,state.phase);
+            reportedPhase=state.phase;diagnostics();
         };
         const resized = () => {
             if (terminalError) {
@@ -97,12 +95,12 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
             const r = view.current?.getBoundingClientRect();
             if (r)
                 setSize({ width: r.width, height: r.height });
-            invalidate('Finding markers…');
+            invalidate('Finding markers…','view-changed',true);
         };
         const observer = new ResizeObserver(resized);
         if (view.current)
             observer.observe(view.current);
-        const visibility = () => { epoch.current++; invalidate('Finding markers…'); };
+        const visibility = () => { epoch.current++; invalidate('Finding markers…','visibility-changed',true); };
         document.addEventListener('visibilitychange', visibility);
         async function start() {
             try {
@@ -123,74 +121,71 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                 if (stopped)
                     return;
                 worker = new Worker(new URL('./tracker.worker.ts', import.meta.url), { type: 'module' });
-                let processingWidth=1280,lastResolutionChange=0,pendingPose:Pose|null=null;
+                let processingSize=1280,lastResolutionChange=0,pendingPose:Pose|null=null;
                 const frame = () => {
                     if (stopped)
                         return;
                     if (document.visibilityState !== 'visible' || v.readyState < 2) {
-                        invalidate('Finding markers…');
+                        invalidate('Finding markers…','camera-not-ready',true);
                         timer = setTimeout(frame, 150);
                         return;
                     }
-                    canvas.width = Math.min(v.videoWidth, processingWidth);
-                    canvas.height = Math.round(canvas.width * v.videoHeight / v.videoWidth);
+                    const dimensions=processingFrame(v.videoWidth,v.videoHeight,processingSize);
+                    canvas.width=dimensions.width;canvas.height=dimensions.height;
                     ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
                     const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                    worker!.postMessage({ buffer: data.data.buffer, width: canvas.width, height: canvas.height, at: performance.now(), epoch: epoch.current }, [data.data.buffer]);
+                    worker!.postMessage({ buffer: data.data.buffer, width: canvas.width, height: canvas.height, at: performance.now(), epoch: epoch.current,aim:latest.current.mode==='legacy'?{x:canvas.width*(.5+latest.current.calibration.x),y:canvas.height*(.5+latest.current.calibration.y)}:undefined }, [data.data.buffer]);
                 };
-                worker.onerror = () => { terminalError = 'Camera tracking failed · use Settings to retry or place manually'; invalidate(terminalError); };
+                worker.onerror = () => { terminalError = 'Camera tracking failed · use Options to retry or place manually'; invalidate(terminalError,'worker-error',true); };
                 worker.onmessage = ({ data }) => {
                     if (stopped)
                         return;
                     const now = performance.now(), fps = 1000 / (now - last);
                     last = now;
-                    if(processingWidth>1280&&now-data.at>275){processingWidth=1280;lastResolutionChange=now+8000;}
-                    const found = data.found || [], detected = markers.filter(m => found.some((f: {
+                                        const found = data.found || [], detected = markers.filter(m => found.some((f: {
                         id: number;
                     }) => f.id === m.id)).length;
+                    const tagEdges=found.filter((f:{id:number;corners:Point[]})=>markers.some(m=>m.id===f.id)&&f.corners?.length===4).flatMap((f:{corners:Point[]})=>f.corners.map((p:Point,i:number)=>Math.hypot(p.x-f.corners[(i+1)%4].x,p.y-f.corners[(i+1)%4].y)));
+                    const smallestTag=tagEdges.length?Math.min(...tagEdges):0;
+                    const needDetail=detected<3||smallestTag>0&&smallestTag<24;
+                    const nextBudget=processingBudget(processingSize,now-data.at,needDetail);
+                    if(nextBudget!==processingSize&&(nextBudget<processingSize||now-lastResolutionChange>2000)){lastResolutionChange=now+(nextBudget<processingSize?8000:0);processingSize=nextBudget;}
+                    lastFrame={smallestTagPixels:Math.round(smallestTag),resolution:v.videoWidth+' × '+v.videoHeight,processingResolution:data.width+' × '+data.height,processingMs:Math.round(now-data.at),fps:Math.round(fps),detected:found.length,matched:detected,usable:data.usable||0,inliers:data.fit?.count||0,accepted:0,reprojectionError:data.fit?.error??null,tolerance:data.fit?.tolerance??null,confidence:data.fit?.confidence??null};
+                    let rejectReason='poor-homography';
                     try {
-                        if (data.error)
-                            throw Error(data.error);
-                        const width = Math.min(v.videoWidth, 1280), height = Math.round(width * v.videoHeight / v.videoWidth);
-                        if (data.epoch !== epoch.current || Math.abs(data.width/data.height-width/height)>.01 || now - data.at > MAX_TRACKING_AGE || document.visibilityState !== 'visible')
-                            throw Error('Waiting for a fresh camera view');
-                        const fit = fitMarkers(found),raw:Pose={...fit,at:data.at,width:data.width,height:data.height},previous=poseRef.current;
-                        if(previous&&raw.at-previous.at<700&&trackingMotion(raw,previous)>.18&&(!pendingPose||trackingMotion(raw,pendingPose)>.04)){pendingPose=raw;throw Error('Hold still · checking movement');}
-                        pendingPose=null;
-                        const p=smoothTracking(raw,previous);
-                        if(now-lastResolutionChange>2000&&processingWidth<1920&&fit.count<5){processingWidth=1920;lastResolutionChange=now;}
-                        poseRef.current = p;
-                        live.current = true;
-                        let next = artwork.current;
-                        if (latest.current.mode==='camera-stamp'||precision.current) next=updatePhone(p);
-                        else if (!anchored.current) {
-                            const centre = project(p.h, { x: p.width * (.5 + latest.current.calibration.x), y: p.height * (.5 + latest.current.calibration.y) });
-                            next = { ...next, position_x: centre.x / W, position_y: centre.y / H };
-                            anchored.current=true;
+                        if(data.error){rejectReason='worker-error';throw Error(data.error);}
+                        if(data.epoch!==epoch.current||Math.abs(data.width/data.height-v.videoWidth/v.videoHeight)>.01||document.visibilityState!=='visible'){rejectReason='view-changed';throw Error('Waiting for the current camera view');}
+                        if(now-data.at>MAX_TRACKING_AGE){rejectReason='stale-frame';throw Error('Camera processing is too slow');}
+                        if(!data.fit){rejectReason=data.reason||'poor-homography';throw Error(data.rejection||'Show at least 3 markers');}
+                        const fit=data.fit,raw:Pose={...fit,at:data.at,width:data.width,height:data.height},previous=poseRef.current;
+                        // Compare only tags seen by BOTH fits, never unobserved full-board corners.
+                        const shared=previous?markers.filter(m=>raw.ids.includes(m.id)&&previous.ids.includes(m.id)).flatMap(markerCorners):[];
+                        if(previous&&raw.at-previous.at<700&&trackingMotion(raw,previous,shared)>.18&&(!pendingPose||trackingMotion(raw,pendingPose,shared)>.04)){
+                            pendingPose=raw;rejectReason='motion-confirmation';throw Error('Confirming camera movement');
                         }
-                        else if (gesture.current && pointers.current.size)
-                            next = manipulate(gesture.current, worldPoints(p));
-                        publishRef.current(next, p.at);
-                        setPose(p);
-                        report(validPlacement(next) ? ('Tracking · ' + fit.count + '/8' + (fit.confidence === 'high' ? ' · strong' : '')) : 'Sticker outside wallpaper', validPlacement(next) ? 'locked' : 'outside');
-                        setMetrics({ resolution: v.videoWidth + ' × ' + v.videoHeight, fps, detected, used: fit.count, error: fit.error });
+                        pendingPose=null;
+                        const centre={x:raw.width/2,y:raw.height/2},r=Math.min(raw.width,raw.height)*.1;
+                        const local=[{x:centre.x-r,y:centre.y-r},{x:centre.x+r,y:centre.y-r},{x:centre.x+r,y:centre.y+r},{x:centre.x-r,y:centre.y+r}].map(q=>project(raw.h,q));
+                        const p=smoothTracking(raw,previous,local);
+
+                        poseRef.current=p;live.current=true;tracking.accept(p.at,now);lastFrame.accepted=fit.count;
+                        let next=artwork.current;
+                        if(latest.current.mode==='camera-stamp'||precision.current)next=updatePhone(p);
+                        else if(!anchored.current){const q=project(p.h,{x:p.width*(.5+latest.current.calibration.x),y:p.height*(.5+latest.current.calibration.y)});next={...next,position_x:q.x/W,position_y:q.y/H};anchored.current=true;}
+                        else if(gesture.current&&pointers.current.size)next=manipulate(gesture.current,worldPoints(p));
+                        publishRef.current(next,p.at);setPose(p);
+                        report(validPlacement(next)?'Tracking · '+fit.count+'/8':'Sticker outside wallpaper',validPlacement(next)?'locked':'outside');
+                        reportedPhase='locked';diagnostics();
+                    }catch(e){
+                        invalidate(e instanceof Error?e.message:'Hold still to track',rejectReason);
                     }
-                    catch (e) {
-                        if(now-lastResolutionChange>2000&&processingWidth<1920){processingWidth=1920;lastResolutionChange=now;}
-                        invalidate(detected < 3 ? 'Show at least 3 markers' : (e instanceof Error ? e.message : 'Hold still to track'));
-                        setMetrics({ resolution: v.videoWidth + ' × ' + v.videoHeight, fps, detected, used: 0, error: 0 });
-                    }
-                    timer = setTimeout(frame, 60);
+                    timer = setTimeout(frame, FRAME_PAUSE);
                 };
-                watchdog = setInterval(() => {
-                    const previous = poseRef.current;
-                    if (previous && performance.now() - previous.at > MAX_TRACKING_AGE)
-                        invalidate('Tracking lost · show 3 markers');
-                    else if (!live.current && previous && performance.now() - previous.at > DROPOUT_HOLD) {
-                        setPose(null);
-                        report('Tracking lost · show 3 markers', 'lost');
-                    }
-                }, 60);
+                watchdog = setInterval(()=>{
+                    const state=tracking.read(performance.now());
+                    if(live.current&&!state.stampable){invalidate('Waiting for a fresh camera solution','stale-frame');}
+                    else if(!live.current&&state.phase!==reportedPhase){setPose(state.phase==='holding'?poseRef.current:null);report(state.phase==='holding'?'Tracking · recovering':'Tracking lost · show 3 markers',state.phase);reportedPhase=state.phase;diagnostics();}
+                },60);
                 frame();
             }
             catch (e) {
@@ -198,7 +193,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                     live.current = false;
                     latest.current.onPlacement(null);
                     terminalError = e instanceof Error ? e.message : String(e);
-                    report(terminalError, 'lost');
+                    invalidate(terminalError,'camera-error',true);
                 }
             }
         }

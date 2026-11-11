@@ -24,9 +24,9 @@ export function resizePhoneStamp(base:{size:number;rotation:number},start:Point[
  if(distance<1)return base;
  return {size:Math.max(.06,Math.min(.85,base.size*Math.hypot(b.x,b.y)/distance)),rotation:wrapAngle(base.rotation+(Math.atan2(b.y,b.x)-Math.atan2(a.y,a.x))*180/Math.PI)};
 }
-export function smoothTracking<T extends {h:number[];inverse:number[];width:number;height:number;at:number}>(next:T,previous:T|null):T {
+export function smoothTracking<T extends {h:number[];inverse:number[];width:number;height:number;at:number}>(next:T,previous:T|null,support?:Point[]):T {
  if(!previous||next.at-previous.at>250||Math.abs(next.width/next.height-previous.width/previous.height)>.01)return next;
- const board=[{x:0,y:0},{x:W,y:0},{x:W,y:H},{x:0,y:H}];
+ const board=support||[{x:0,y:0},{x:W,y:0},{x:W,y:H},{x:0,y:H}];
  const a=board.map(p=>project(next.inverse,p)),b=board.map(p=>{const q=project(previous.inverse,p);return {x:q.x*next.width/previous.width,y:q.y*next.height/previous.height};});
  if(Math.max(...a.map((p,i)=>Math.hypot((p.x-b[i].x)/next.width,(p.y-b[i].y)/next.height)))>.002)return next;
  const inverse=homography(board,a.map((p,i)=>({x:.7*p.x+.3*b[i].x,y:.7*p.y+.3*b[i].y})));
@@ -34,8 +34,8 @@ export function smoothTracking<T extends {h:number[];inverse:number[];width:numb
 }
 
 // Compare projected board corners in normalized camera coordinates across resolutions.
-export function trackingMotion(next:{inverse:number[];width:number;height:number},previous:{inverse:number[];width:number;height:number}) {
- return Math.max(...[{x:0,y:0},{x:W,y:0},{x:W,y:H},{x:0,y:H}].map(p=>{const a=project(next.inverse,p),b=project(previous.inverse,p);return Math.hypot(a.x/next.width-b.x/previous.width,a.y/next.height-b.y/previous.height);}));
+export function trackingMotion(next:{inverse:number[];width:number;height:number},previous:{inverse:number[];width:number;height:number},support:Point[]=[{x:0,y:0},{x:W,y:0},{x:W,y:H},{x:0,y:H}]) {
+ return Math.max(0,...support.map(p=>{const a=project(next.inverse,p),b=project(previous.inverse,p);return Math.hypot(a.x/next.width-b.x/previous.width,a.y/next.height-b.y/previous.height);}));
 }
 
 export function phoneReference(v:Viewport,displayZoom:1|2){return Math.min(v.width,v.height,v.imageWidth*v.scale/displayZoom,v.imageHeight*v.scale/displayZoom);}
