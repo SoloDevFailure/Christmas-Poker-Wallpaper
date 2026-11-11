@@ -83,3 +83,13 @@ References: [js-aruco2](https://github.com/damianofalcioni/js-aruco2), [Supabase
 React and react-dom are pinned to the same exact version. `npm run build` checks runtime compatibility before bundling. Startup import failures and component rendering failures show visible messages with reload controls. The production wallpaper has been verified in a browser; physical iPhone tracking remains a separate acceptance test.
 
 Version 0.2 preserves the database schema and existing stamp transformations. No Supabase migration is needed. Portrait/landscape adaptation uses the actual contained video rectangle and safe-area spacing; it does not request an orientation lock. Precision size/rotation sliders are only in manual mode.
+
+## Custom text and keyboard emoji stamps
+
+The controller retains the three presets and adds an **Aa** button. Enter ordinary text, emojis from the native keyboard, mixed content or up to four lines, then press **Place**. The result uses the same camera/manual controls and preview/stamp flow.
+
+Text is rasterized once on the originating phone into a transparent PNG using its normal system font/emoji rendering. That exact image is used on the PC and in exports. Input is bounded to 160 UTF-16 characters, images to 512×256 pixels and data URLs to 65,536 characters (at most 48 KiB encoded PNG bytes). Oversized images are downsampled or rejected. Scale represents the longest side; presets keep their existing square sizing and stored coordinates.
+
+**Required additive SQL migration:** run `supabase/migrations/202611110002_custom_stamps.sql` once in the existing project SQL Editor. It adds three nullable fields (PNG data, width and height), accepts the custom stamp type and validates PNG header dimensions/size. Existing session membership/RLS policies remain in force. No Storage bucket, service-role key, new project or separate emoji picker is used. Preset writes continue to work before this migration, but permanent custom stamps require it.
+
+This addition has not been deployed or integration-tested against the database yet. Browser automation stopped before the migration could be run. TypeScript, 45 automated tests and the production build passed; actual browser rasterization, native phone keyboard behavior and saved custom-image preview/export still need verification after applying the migration.

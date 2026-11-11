@@ -1,5 +1,5 @@
 import { H, W, project, type Point } from './geometry';
-import type { Placement } from './types';
+import { stampDimensions, type Placement } from './types';
 export const MAX_TRACKING_AGE = 350, DROPOUT_HOLD = 250;
 export type Viewport = {
     width: number;
@@ -43,9 +43,12 @@ export function manipulate(base: Gesture, points: Point[]): Placement {
     return { ...base.placement, position_x: (after.x + ratio * (x * Math.cos(angle) - y * Math.sin(angle))) / W, position_y: (after.y + ratio * (x * Math.sin(angle) + y * Math.cos(angle))) / H, scale: base.placement.scale * ratio, rotation: wrapAngle(base.placement.rotation + angle * 180 / Math.PI) };
 }
 export function stickerCorners(p: Placement): Point[] {
-    const angle = p.rotation * Math.PI / 180;
-    return [[-.5, -.5], [.5, -.5], [.5, .5], [-.5, .5]].map(([x, y]) => ({ x: p.position_x * W + p.scale * (x * Math.cos(angle) - y * Math.sin(angle)), y: p.position_y * H + p.scale * (x * Math.sin(angle) + y * Math.cos(angle)) }));
+    const angle = p.rotation * Math.PI / 180, { width, height } = stampDimensions(p);
+    return [[-.5, -.5], [.5, -.5], [.5, .5], [-.5, .5]].map(([x, y]) => ({ x: p.position_x * W + width * x * Math.cos(angle) - height * y * Math.sin(angle), y: p.position_y * H + width * x * Math.sin(angle) + height * y * Math.cos(angle) }));
 }
-export function trackingPhase(at: number, now: number, valid: boolean) { if (valid && now - at <= MAX_TRACKING_AGE)
-    return 'locked'; return now - at <= DROPOUT_HOLD ? 'holding' : 'lost'; }
+export function trackingPhase(at: number, now: number, valid: boolean) {
+    if (valid && now - at <= MAX_TRACKING_AGE)
+        return 'locked';
+    return now - at <= DROPOUT_HOLD ? 'holding' : 'lost';
+}
 export function cameraPoint(h: number[], p: Point, v: Viewport) { return project(h, viewToImage(p, v)); }

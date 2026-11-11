@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import { fitMarkers, homography, markers, project, W, H, type Point } from './geometry';
 import { MAX_TRACKING_AGE, DROPOUT_HOLD, trackingPhase, videoViewport, viewToImage, imageToView, onVideo, manipulate, stickerCorners, type Gesture } from './manipulation';
-import { validPlacement, type Placement } from './types';
-import { sources } from './art';
+import { validPlacement, stampAsset, type Placement } from './types';
+import { stampSource } from './art';
 type Pose = {
     h: number[];
     inverse: number[];
@@ -27,28 +27,34 @@ export default function Camera(props: Props) {
     const video = useRef<HTMLVideoElement>(null), view = useRef<HTMLDivElement>(null), latest = useRef(props);
     latest.current = props;
     const artwork = useRef(props.placement), anchored = useRef(props.initiallyAnchored), poseRef = useRef<Pose | null>(null), live = useRef(false), epoch = useRef(0);
-    artwork.current = { ...artwork.current, stamp_type: props.placement.stamp_type };
+    artwork.current = { ...artwork.current, ...stampAsset(props.placement) };
     const pointers = useRef(new Map<number, Point>()), gesture = useRef<Gesture | null>(null);
     const [pose, setPose] = useState<Pose | null>(null), [overlay, setOverlay] = useState(props.placement), [size, setSize] = useState({ width: 0, height: 0 });
     const [status, setStatus] = useState('Opening camera…'), [phase, setPhase] = useState('lost'), [metrics, setMetrics] = useState({ resolution: '', fps: 0, detected: 0, used: 0, error: 0 });
     const previousReset = useRef(props.aimReset);
     useEffect(() => {
-        if (props.debug) latest.current.onMetrics({...metrics,x:overlay.position_x,y:overlay.position_y,scale:overlay.scale,rotation:overlay.rotation,mode:anchored.current?'wallpaper anchored':'camera aim'});
-    }, [props.debug,metrics,overlay]);
+        if (props.debug)
+            latest.current.onMetrics({ ...metrics, x: overlay.position_x, y: overlay.position_y, scale: overlay.scale, rotation: overlay.rotation, mode: anchored.current ? 'wallpaper anchored' : 'camera aim' });
+    }, [props.debug, metrics, overlay]);
     const publishRef = useRef<(p: Placement, at: number) => void>(() => { });
     publishRef.current = (p, at) => { artwork.current = p; setOverlay(p); latest.current.onPlacement(validPlacement(p) ? p : null, at); };
     function viewport(p: Pose) { const box = view.current!.getBoundingClientRect(); return videoViewport(box.width, box.height, p.width, p.height); }
     function worldPoints(p: Pose) { const vp = viewport(p); return [...pointers.current.values()].slice(0, 2).map(q => project(p.h, viewToImage(q, vp))); }
-    function rebase() { const p = poseRef.current; if (p && live.current)
-        gesture.current = { placement: { ...artwork.current }, points: worldPoints(p) };
-    else
-        gesture.current = null; }
-    useEffect(() => { if (previousReset.current !== props.aimReset) {
-        anchored.current = false;
-        gesture.current = null;
-        pointers.current.clear();
-        previousReset.current = props.aimReset;
-    } }, [props.aimReset]);
+    function rebase() {
+        const p = poseRef.current;
+        if (p && live.current)
+            gesture.current = { placement: { ...artwork.current }, points: worldPoints(p) };
+        else
+            gesture.current = null;
+    }
+    useEffect(() => {
+        if (previousReset.current !== props.aimReset) {
+            anchored.current = false;
+            gesture.current = null;
+            pointers.current.clear();
+            previousReset.current = props.aimReset;
+        }
+    }, [props.aimReset]);
     useEffect(() => {
         let terminalError: string | null = null;
         let stopped = false, stream: MediaStream | undefined, worker: Worker | undefined, timer: ReturnType<typeof setTimeout>, watchdog: ReturnType<typeof setInterval>, last = performance.now();
@@ -69,11 +75,17 @@ export default function Camera(props: Props) {
                 report(text, 'lost');
             }
         };
-        const resized = () => { if (terminalError) {
-            report(terminalError, 'lost');
-            return;
-        } epoch.current++; const r = view.current?.getBoundingClientRect(); if (r)
-            setSize({ width: r.width, height: r.height }); invalidate('Finding markers…'); };
+        const resized = () => {
+            if (terminalError) {
+                report(terminalError, 'lost');
+                return;
+            }
+            epoch.current++;
+            const r = view.current?.getBoundingClientRect();
+            if (r)
+                setSize({ width: r.width, height: r.height });
+            invalidate('Finding markers…');
+        };
         const observer = new ResizeObserver(resized);
         if (view.current)
             observer.observe(view.current);
@@ -172,16 +184,31 @@ export default function Camera(props: Props) {
         return () => { stopped = true; observer.disconnect(); document.removeEventListener('visibilitychange', visibility); clearTimeout(timer); clearInterval(watchdog); worker?.terminate(); stream?.getTracks().forEach(t => t.stop()); live.current = false; latest.current.onPlacement(null); };
     }, []);
     function location(e: PointerEvent<HTMLDivElement>): Point { const r = e.currentTarget.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
-    function down(e: PointerEvent<HTMLDivElement>) { const p = poseRef.current; if (props.disabled || !p || !live.current || performance.now() - p.at > MAX_TRACKING_AGE || !onVideo(location(e), viewport(p)) || pointers.current.size >= 2)
-        return; e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); anchored.current = true; pointers.current.set(e.pointerId, location(e)); rebase(); }
-    function move(e: PointerEvent<HTMLDivElement>) { if (!pointers.current.has(e.pointerId))
-        return; e.preventDefault(); pointers.current.set(e.pointerId, location(e)); const p = poseRef.current; if (!p || !live.current || !gesture.current)
-        return; publishRef.current(manipulate(gesture.current, worldPoints(p)), p.at); }
+    function down(e: PointerEvent<HTMLDivElement>) {
+        const p = poseRef.current;
+        if (props.disabled || !p || !live.current || performance.now() - p.at > MAX_TRACKING_AGE || !onVideo(location(e), viewport(p)) || pointers.current.size >= 2)
+            return;
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        anchored.current = true;
+        pointers.current.set(e.pointerId, location(e));
+        rebase();
+    }
+    function move(e: PointerEvent<HTMLDivElement>) {
+        if (!pointers.current.has(e.pointerId))
+            return;
+        e.preventDefault();
+        pointers.current.set(e.pointerId, location(e));
+        const p = poseRef.current;
+        if (!p || !live.current || !gesture.current)
+            return;
+        publishRef.current(manipulate(gesture.current, worldPoints(p)), p.at);
+    }
     function up(e: PointerEvent<HTMLDivElement>) { pointers.current.delete(e.pointerId); rebase(); }
     let transform = '', crosshair: Point | null = null;
     if (pose && view.current) {
         const vp = videoViewport(size.width || view.current.clientWidth, size.height || view.current.clientHeight, pose.width, pose.height);
-        const corners = stickerCorners(overlay).map(p => imageToView(project(pose.inverse, p), vp));
+        const corners = stickerCorners({ ...overlay, ...stampAsset(props.placement) }).map(p => imageToView(project(pose.inverse, p), vp));
         try {
             const m = homography([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }], corners);
             transform = 'matrix3d(' + [m[0], m[3], 0, m[6], m[1], m[4], 0, m[7], 0, 0, 1, 0, m[2], m[5], 0, 1].join(',') + ')';
@@ -193,7 +220,7 @@ export default function Camera(props: Props) {
     return <>
     <div ref={view} className="camera-view" aria-label="Camera sticker placement" onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onLostPointerCapture={up}>
       <video ref={video} muted playsInline aria-label="Rear camera"/>
-      <img className="camera-stamp" src={sources[props.placement.stamp_type]} alt="Selected sticker" style={{ transform, display: transform ? 'block' : 'none', opacity: phase === 'holding' ? .35 : .85 }}/>
+      <img className="camera-stamp" src={stampSource(props.placement)} alt="Selected sticker" style={{ transform, display: transform ? 'block' : 'none', opacity: phase === 'holding' ? .35 : .85 }}/>
       {crosshair && <span className="crosshair" style={{ left: crosshair.x, top: crosshair.y }}>+</span>}
     </div>
     <p className={'tracking-status ' + phase} role="status">{status}</p>

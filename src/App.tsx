@@ -4,9 +4,9 @@ const { AR } = Aruco;
 import QRCode from 'qrcode';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { db, identity, loadStamps, openSession, saveStamp } from './backend';
-import { icons, sources, exportArt } from './art';
+import { stampSource, exportArt } from './art';
 import { markers, SIZE, W, H } from './geometry';
-import { type Placement, type Preview, type Session, type Stamp, type StampType, validPlacement } from './types';
+import { type Placement, type Preview, type Session, type Stamp, validPlacement, stampDimensions } from './types';
 import PhoneController from './PhoneController';
 import { MAX_TRACKING_AGE } from './manipulation';
 const initial: Placement = { stamp_type: 'star', position_x: .5, position_y: .5, scale: 160, rotation: 0 };
@@ -15,7 +15,7 @@ const markerImages = markers.map(m => 'data:image/svg+xml;charset=utf-8,' + enco
 function StampImage({ p, preview = false }: {
     p: Placement;
     preview?: boolean;
-}) { return <image href={sources[p.stamp_type]} x={-p.scale / 2} y={-p.scale / 2} width={p.scale} height={p.scale} opacity={preview ? .6 : 1} transform={`translate(${p.position_x * W} ${p.position_y * H}) rotate(${p.rotation})`}/>; }
+}) { const { width, height } = stampDimensions(p); return <image href={stampSource(p)} x={-width / 2} y={-height / 2} width={width} height={height} opacity={preview ? .6 : 1} transform={`translate(${p.position_x * W} ${p.position_y * H}) rotate(${p.rotation})`}/>; }
 export default function App() {
     const phone = location.pathname.replace(/\/$/, '').endsWith('/phone');
     const [code, setCode] = useState(new URLSearchParams(location.search).get('session') || (!phone ? localStorage.getItem('wallpaper-code') || '' : ''));

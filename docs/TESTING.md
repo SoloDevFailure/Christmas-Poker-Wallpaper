@@ -52,3 +52,9 @@ Verified in the browser against the production preview: session creation, the fu
 - Temporary synthetic camera build: actual worker detected three markers; browser PointerEvents exercised drag and two-finger scale/rotation. Removing a second marker disabled Stamp and hid the stale overlay; restoring three reacquired tracking. Rotation of the viewport preserved the anchored sticker. The synthetic fixture is tests/browser-camera.fixture.ts; native pointer capture was stubbed because synthetic events do not create real native pointers. This does not verify Safari multitouch or physical camera behavior.
 - To repeat that browser-only fixture, temporarily import it from src/bootstrap.tsx, build and open a joined phone controller in the local preview. Remove that import and rebuild before deploying. The production bootstrap must not import the fixture.
 - Physical iPhone verification remains required: rear camera behavior, fast motion/dropout recovery, calibration, true multitouch, safe-area/browser chrome behavior, and three-marker accuracy at real viewing angles. No physical device tests were performed here.
+
+## Custom text/image stamp checks
+
+45 automated tests pass, covering native keyboard Unicode/ZWJ segmentation, newline/input limits, bounded wrapping, PNG header/payload validation, rectangular camera geometry, scale/rotation/translation and unchanged preset transforms. TypeScript and production build pass.
+
+Pending real-browser/database checks after migration 202611110002_custom_stamps.sql: enter multiline mixed text/emoji, Place, drag/pinch/rotate, preview on another client, stamp, reload PC and export PNG. Verify alpha transparency and matching aspect/appearance in every view. Browser automation stopped because it could not confidently determine the Windows browser URL; the migration was not executed and this addition has not been deployed.
