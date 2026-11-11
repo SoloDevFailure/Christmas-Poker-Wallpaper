@@ -1,9 +1,9 @@
 import { useRef, useState } from 'react';
 import Camera from './Camera';
 import { rasterizeText, MAX_TEXT_LENGTH, MAX_TEXT_LINES } from './customStamp';
-import { sources, stampSource } from './art';
+import { stampSource } from './art';
 import { W, H, type Point } from './geometry';
-import { icons, type Placement, type Stamp, type PresetType, stampDimensions } from './types';
+import { type Placement, type Stamp, stampDimensions } from './types';
 type Props = {
     placement: Placement;
     stamps: Stamp[];
@@ -56,7 +56,7 @@ export default function PhoneController(p: Props) {
     {p.camera && <Camera placement={p.placement} onPlacement={p.onCameraPlacement} onStatus={p.onStatus} debug={settings && debug} onMetrics={setCameraDebug} calibration={calibration} aimReset={aimReset} initiallyAnchored={usedManual.current} disabled={p.busy || settings || textOpen}/>}
     <header className="phone-toolbar">
       <strong>CHRISTMAS POKER 2026</strong>
-      <div className="sticker-picker" aria-label="Choose sticker">{(Object.keys(icons) as PresetType[]).map(k => <button key={k} aria-label={'Choose ' + k} aria-pressed={p.placement.stamp_type === k} disabled={p.busy} onClick={() => p.onChange({ ...p.placement, stamp_type: k, image_data: undefined, image_width: undefined, image_height: undefined })}><img src={sources[k]} alt=""/></button>)}<button aria-label="Text or emoji" aria-pressed={p.placement.stamp_type === 'custom'} aria-expanded={textOpen} disabled={p.busy} onClick={() => { setTextOpen(v => !v); setSettings(false); setTextError(''); }}>Aa</button></div>
+      <div className="sticker-picker" aria-label="Choose sticker"><button aria-label="Text or emoji" aria-pressed={p.placement.stamp_type === 'custom'} aria-expanded={textOpen} disabled={p.busy} onClick={() => { setTextOpen(v => !v); setSettings(false); setTextError(''); }}>Aa</button></div>
       <span className={'connection ' + (p.online ? 'good' : 'lost')} aria-label={p.online ? 'Connected' : 'Connecting'}>{p.online ? '●' : '○'}</span>
       <button className="settings-button" aria-label="Settings" aria-expanded={settings} onClick={() => { setSettings(v => !v); setTextOpen(false); }}>⚙</button>
     </header>

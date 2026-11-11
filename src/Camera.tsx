@@ -31,6 +31,8 @@ export default function Camera(props: Props) {
     const pointers = useRef(new Map<number, Point>()), gesture = useRef<Gesture | null>(null);
     const [pose, setPose] = useState<Pose | null>(null), [overlay, setOverlay] = useState(props.placement), [size, setSize] = useState({ width: 0, height: 0 });
     const [status, setStatus] = useState('Opening camera…'), [phase, setPhase] = useState('lost'), [metrics, setMetrics] = useState({ resolution: '', fps: 0, detected: 0, used: 0, error: 0 });
+    const [displayZoom,setDisplayZoom]=useState<1|2>(1);
+    const zoomRef=useRef<1|2>(1);
     const previousReset = useRef(props.aimReset);
     useEffect(() => {
         if (props.debug)
@@ -38,7 +40,7 @@ export default function Camera(props: Props) {
     }, [props.debug, metrics, overlay]);
     const publishRef = useRef<(p: Placement, at: number) => void>(() => { });
     publishRef.current = (p, at) => { artwork.current = p; setOverlay(p); latest.current.onPlacement(validPlacement(p) ? p : null, at); };
-    function viewport(p: Pose) { const box = view.current!.getBoundingClientRect(); return videoViewport(box.width, box.height, p.width, p.height); }
+    function viewport(p: Pose) { const box = view.current!.getBoundingClientRect(); return videoViewport(box.width, box.height, p.width, p.height,'contain',zoomRef.current); }
     function worldPoints(p: Pose) { const vp = viewport(p); return [...pointers.current.values()].slice(0, 2).map(q => project(p.h, viewToImage(q, vp))); }
     function rebase() {
         const p = poseRef.current;
@@ -183,6 +185,14 @@ export default function Camera(props: Props) {
         void start();
         return () => { stopped = true; observer.disconnect(); document.removeEventListener('visibilitychange', visibility); clearTimeout(timer); clearInterval(watchdog); worker?.terminate(); stream?.getTracks().forEach(t => t.stop()); live.current = false; latest.current.onPlacement(null); };
     }, []);
+    function toggleDisplayZoom() {
+        // Freeze the current wallpaper transform, never scale the stamp itself.
+        // Both the display and inverse touch mapping use the same centred crop.
+        if(poseRef.current) anchored.current=true;
+        pointers.current.clear();gesture.current=null;
+        zoomRef.current=zoomRef.current===1?2:1;
+        setDisplayZoom(zoomRef.current);
+    }
     function location(e: PointerEvent<HTMLDivElement>): Point { const r = e.currentTarget.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
     function down(e: PointerEvent<HTMLDivElement>) {
         const p = poseRef.current;
@@ -207,7 +217,7 @@ export default function Camera(props: Props) {
     function up(e: PointerEvent<HTMLDivElement>) { pointers.current.delete(e.pointerId); rebase(); }
     let transform = '', crosshair: Point | null = null;
     if (pose && view.current) {
-        const vp = videoViewport(size.width || view.current.clientWidth, size.height || view.current.clientHeight, pose.width, pose.height);
+        const vp = videoViewport(size.width || view.current.clientWidth, size.height || view.current.clientHeight, pose.width, pose.height, 'contain', displayZoom);
         const corners = stickerCorners({ ...overlay, ...stampAsset(props.placement) }).map(p => imageToView(project(pose.inverse, p), vp));
         try {
             const m = homography([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }], corners);
@@ -219,10 +229,11 @@ export default function Camera(props: Props) {
     }
     return <>
     <div ref={view} className="camera-view" aria-label="Camera sticker placement" onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onLostPointerCapture={up}>
-      <video ref={video} muted playsInline aria-label="Rear camera"/>
+      <video ref={video} muted playsInline aria-label="Rear camera" style={{transform: 'scale('+displayZoom+')',transformOrigin:'50% 50%'}}/>
       <img className="camera-stamp" src={stampSource(props.placement)} alt="Selected sticker" style={{ transform, display: transform ? 'block' : 'none', opacity: phase === 'holding' ? .35 : .85 }}/>
       {crosshair && <span className="crosshair" style={{ left: crosshair.x, top: crosshair.y }}>+</span>}
     </div>
+    <button className="display-zoom" aria-label="Display zoom" aria-pressed={displayZoom===2} title="Relative display zoom; tracking uses the full frame" disabled={props.disabled} onClick={toggleDisplayZoom}>{displayZoom}×</button>
     <p className={'tracking-status ' + phase} role="status">{status}</p>
 
   </>;

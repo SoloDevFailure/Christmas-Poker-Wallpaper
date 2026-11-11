@@ -10,8 +10,8 @@ export type Viewport = {
     x: number;
     y: number;
 };
-export function videoViewport(width: number, height: number, imageWidth: number, imageHeight: number, fit: 'contain' | 'cover' = 'contain'): Viewport {
-    const scale = (fit === 'contain' ? Math.min : Math.max)(width / imageWidth, height / imageHeight);
+export function videoViewport(width: number, height: number, imageWidth: number, imageHeight: number, fit: 'contain' | 'cover' = 'contain', displayZoom: 1 | 2 = 1): Viewport {
+    const scale = (fit === 'contain' ? Math.min : Math.max)(width / imageWidth, height / imageHeight) * displayZoom;
     return { width, height, imageWidth, imageHeight, scale, x: (width - imageWidth * scale) / 2, y: (height - imageHeight * scale) / 2 };
 }
 export function viewToImage(p: Point, v: Viewport): Point { return { x: (p.x - v.x) / v.scale, y: (p.y - v.y) / v.scale }; }
