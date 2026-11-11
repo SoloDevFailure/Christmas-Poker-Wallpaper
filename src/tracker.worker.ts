@@ -6,11 +6,12 @@ self.onmessage = (event: MessageEvent<{
     width: number;
     height: number;
     at: number;
+    epoch: number;
 }>) => {
     try {
-        const { buffer, width, height, at } = event.data;
+        const { buffer, width, height, at, epoch } = event.data;
         const found = detector.detect(new ImageData(new Uint8ClampedArray(buffer), width, height));
-        self.postMessage({ found, at });
+        self.postMessage({ found, at, width, height, epoch });
     }
     catch (e) {
         self.postMessage({ error: String(e) });

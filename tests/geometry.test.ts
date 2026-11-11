@@ -11,15 +11,16 @@ test('perspective mapping recovers an oblique screen including interior points',
         assert.ok(Math.hypot(p.x - q.x, p.y - q.y) < .001);
     }
 });
-test('all four unique markers required and fit uses 16 corners', () => {
+test('four-marker fit uses all corners and rejects ambiguous IDs', () => {
     const h = [.5, .03, 30, .02, .5, 20, .0001, .00003];
     const found = markers.map(m => ({ id: m.id, corners: [{ x: m.x, y: m.y }, { x: m.x + SIZE, y: m.y }, { x: m.x + SIZE, y: m.y + SIZE }, { x: m.x, y: m.y + SIZE }].map(p => project(h, p)) }));
     const fit = fitMarkers(found);
     assert.ok(fit.error < .001);
     const q = project(fit.h, project(h, { x: 960, y: 540 }));
     assert.ok(Math.abs(q.x - 960) < .001);
-    assert.throws(() => fitMarkers(found.slice(1)));
-    assert.throws(() => fitMarkers([...found, found[0]]));
+    assert.equal(fitMarkers(found.slice(1)).count, 3);
+    assert.throws(() => fitMarkers(found.slice(2)));
+    assert.equal(fitMarkers([...found, found[0]]).count, 3);
 });
 test('reject degenerate geometry and invalid placements', () => {
     assert.throws(() => homography(Array(4).fill({ x: 0, y: 0 }), Array(4).fill({ x: 1, y: 1 })));

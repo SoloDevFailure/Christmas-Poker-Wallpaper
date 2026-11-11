@@ -1,6 +1,6 @@
-# Christmas Poker 2026 — Interactive Wallpaper
+# CHRISTMAS POKER 2026 — Version 0.2
 
-React + TypeScript + Vite prototype with a PC wallpaper, phone camera controller, three consistent transparent SVG stamps, local ArUco tracking in a worker, perspective-aware camera overlay, private Supabase previews, persistent ordered stamps, owner-only reset and PNG export.
+React + TypeScript + Vite prototype with a PC wallpaper, phone camera controller, three consistent transparent SVG stamps, three/four-marker ArUco tracking in a worker, direct sticker gestures and a perspective-aware camera overlay, private Supabase previews, persistent ordered stamps, owner-only reset and PNG export.
 
 ## 1. Configure Supabase
 
@@ -45,8 +45,8 @@ The workflow sets the Vite repository base path, tests/builds and deploys `dist`
 
 1. Create a wallpaper on PC, enter Fullscreen and scan its QR with iPhone.
 2. Open Safari, select a stamp, tap the Manual placement canvas, **Preview on PC**, then **Stamp**. Refresh PC to confirm persistence.
-3. Select **Aim with camera**, allow rear camera and keep **all four tags visible**. Wait for green “Tracking locked · 4/4 markers”.
-4. Move phone to aim; pinch to resize and turn two fingers to rotate. Sliders also work. Preview checks position; Stamp saves it. Aiming-offset controls provide adjustment.
+3. The controller opens in camera mode. Allow rear camera and keep **at least three tags visible**. Four reliable tags are preferred. A compact status shows tracking strength.
+4. Move the phone to aim initially, then drag the sticker with one finger. Two fingers translate, scale and rotate around their centre. After touching, the sticker stays anchored to the wallpaper as the phone moves. **Re-aim** restores camera-centre aiming. Preview checks position; Stamp saves it. Settings holds manual placement, calibration and debugging.
 5. Overlap another stamp, join with a second phone, export PNG on PC.
 
 PC must show Live and phone Connected. Debug shows tracking metrics and received previews. See [the complete test checklist and optional Supabase integration test](docs/TESTING.md).
@@ -55,10 +55,10 @@ PC must show Live and phone Connected. Debug shows tracking metrics and received
 
 - Logical wallpaper: **1920×1080**, centred/aspect-preserving. SVG scales markers and art together through letterboxing, browser resizing and fullscreen.
 - Dictionary: original **ARUCO**, 7×7 including black border, using pinned `js-aruco2@2.0.0`. IDs **17, 133, 271, 409**, clockwise from top-left. Black marker bounds are 140×140 logical pixels plus 24px white quiet zones. Locations: `src/geometry.ts`.
-- Least-squares homography uses all **16 orientation-corrected marker corners**. Reverse fit reports RMS reprojection error in processed camera pixels; fits over 5px are rejected. All four unique tags are mandatory.
+- Normalized least-squares homography uses **12 or 16 orientation-corrected marker corners**. Deterministic marker-level RANSAC tests the full fit and every available three-marker group; an inlier requires every corner within 4 processed camera pixels. Bad/ambiguous detections are discarded. Four inliers are preferred; fewer than three disables placement. No fourth corner is invented.
 - Camera processing stays on phone, at up to 1280px width, in a worker. No camera frames, gyroscope readings or continuous aiming coordinates go to Supabase. Only explicit previews and saved stamps are sent.
-- X/Y are normalized centre coordinates; scale is logical square side length (32–600 pixels); rotation is clockwise degrees in wallpaper Y-down space. The camera image centre plus optional offset is projected onto the board. Camera rotation direction maps through the homography; the stamp is perspective-projected back onto the contained video.
-- Lost, outside-board or stale tracking disables placement. Title, suits, tags and QR stay above all artwork/previews. PNG includes permanent artwork/title/suits, excluding tags/QR/previews.
+- X/Y are normalized centre coordinates; scale is logical square side length (32–600 pixels); rotation is clockwise degrees in wallpaper Y-down space. Before touch manipulation, the camera image centre plus calibration is projected onto the board. Once grabbed, the sticker has one wallpaper-space transform. Touches are mapped through the inverse video containment and homography, then apply one similarity transform around the gesture centre. Camera movement only reprojects the anchored sticker; it is not added as another translation.
+- Lost, outside-board or stale tracking disables placement. A last valid overlay can remain visible for up to 250ms during a dropout, but cannot be stamped. Camera frames older than 350ms are rejected; resizing/orientation changes invalidate in-flight results and reacquire without changing the anchored transform. Title, suits, tags and QR stay above all artwork/previews. PNG includes permanent artwork/title/suits, excluding tags/QR/previews.
 
 ## Persistence and reliability
 
@@ -70,9 +70,9 @@ Database rows are the source of truth. Clients load on subscribe, listen for Pos
 
 ## Limitations / verification
 
-This is implemented source, **not a verified real-device demonstration**. All seven automated tests, TypeScript and the production build passed. Live Supabase checks passed for session isolation, persistence, duplicate UUIDs, private preview broadcasts and owner-only reset. The first private-channel connection failed transiently; the repeat succeeded. Pages output contains real phone and fallback entry files with correct repository asset paths. GitHub deployment and physical iPhone camera tracking remain unverified. [TESTING.md](docs/TESTING.md) records exactly what passed and remains unverified.
+This is implemented source, **not a verified real-device demonstration**. All 40 automated tests, TypeScript and the production build passed. Live Supabase checks passed for session isolation, persistence, duplicate UUIDs, private preview broadcasts and owner-only reset. The first private-channel connection failed transiently; the repeat succeeded. Pages output contains real phone and fallback entry files with correct repository asset paths. GitHub deployment and physical iPhone camera tracking remain unverified. [TESTING.md](docs/TESTING.md) records exactly what passed and remains unverified.
 
-Glare, moiré, focus, small tags, oblique angles and lens distortion affect accuracy. Start facing the display directly, fill most of the camera view with the monitor, keep all tags visible and enable Debug. No lens calibration or partial-marker recovery yet; older phones may be slow. Stamp centres must stay inside the board; edges may clip.
+Glare, moiré, focus, small tags, oblique angles and lens distortion affect accuracy. Start facing the display directly, fill most of the camera view with the monitor, keep all tags visible and enable Debug. No lens calibration or tracking with fewer than three complete markers yet; older phones may be slow. Stamp centres must stay inside the board; edges may clip.
 
 Safari/Chrome permission prompts, rear-camera choice and background-tab behavior need physical-device testing. Rear-facing camera is requested as a preference. Camera mode fills the viewport with controls overlaid; switch to Manual to stop it. The PC Fullscreen API may be unavailable on mobile Safari. No native app or installation is needed.
 
@@ -81,3 +81,5 @@ For wider public use, add CAPTCHA/rate limits, invitation rotation and moderatio
 References: [js-aruco2](https://github.com/damianofalcioni/js-aruco2), [Supabase private Realtime authorization](https://supabase.com/docs/guides/realtime/authorization).
 
 React and react-dom are pinned to the same exact version. `npm run build` checks runtime compatibility before bundling. Startup import failures and component rendering failures show visible messages with reload controls. The production wallpaper has been verified in a browser; physical iPhone tracking remains a separate acceptance test.
+
+Version 0.2 preserves the database schema and existing stamp transformations. No Supabase migration is needed. Portrait/landscape adaptation uses the actual contained video rectangle and safe-area spacing; it does not request an orientation lock. Precision size/rotation sliders are only in manual mode.
