@@ -2,8 +2,16 @@ export type Point = {
     x: number;
     y: number;
 };
-export const W = 1920, H = 1080, SIZE = 140;
-export const markers = [{ id: 17, x: 40, y: 40, suit: '♠' }, { id: 133, x: 1740, y: 40, suit: '♥' }, { id: 271, x: 1740, y: 900, suit: '♣' }, { id: 409, x: 40, y: 900, suit: '♦' }];
+export const W = 1920, H = 1080, SIZE = 108, QUIET = 24;
+// Stored artwork stays 1920×1080. Only its presentation is inset by 5%.
+export const CANVAS = {x:96,y:54,width:1728,height:972,scale:.9};
+export function canvasToPresentation(p:Point):Point{return {x:CANVAS.x+p.x*CANVAS.scale,y:CANVAS.y+p.y*CANVAS.scale};}
+export function presentationToCanvas(p:Point):Point{return {x:(p.x-CANVAS.x)/CANVAS.scale,y:(p.y-CANVAS.y)/CANVAS.scale};}
+export const markers = [
+ {id:41,x:24,y:24},{id:73,x:906,y:24},{id:105,x:1788,y:24},
+ {id:137,x:24,y:486},{id:169,x:1788,y:486},
+ {id:201,x:24,y:948},{id:233,x:906,y:948},{id:265,x:1788,y:948}
+];
 export function project(h: number[], p: Point): Point { const z = h[6] * p.x + h[7] * p.y + 1; return { x: (h[0] * p.x + h[1] * p.y + h[2]) / z, y: (h[3] * p.x + h[4] * p.y + h[5]) / z }; }
 // Least-squares eight-parameter homography, using every detected marker corner.
 function solveHomography(from: Point[], to: Point[]): number[] {
@@ -66,13 +74,17 @@ export type Detection = {
 };
 export const MAX_REPROJECTION_ERROR = 4;
 export function markerCorners(m: typeof markers[number]): Point[] {
-    return [{ x: m.x, y: m.y }, { x: m.x + SIZE, y: m.y }, { x: m.x + SIZE, y: m.y + SIZE }, { x: m.x, y: m.y + SIZE }];
+    return [{ x: m.x, y: m.y }, { x: m.x + SIZE, y: m.y }, { x: m.x + SIZE, y: m.y + SIZE }, { x: m.x, y: m.y + SIZE }].map(presentationToCanvas);
 }
 function soundQuad(points: Point[]) {
     if (points.length !== 4 || points.some(p => !Number.isFinite(p.x) || !Number.isFinite(p.y)))
         return false;
     const cross = points.map((p, i) => { const q = points[(i + 1) % 4], r = points[(i + 2) % 4]; return (q.x - p.x) * (r.y - q.y) - (q.y - p.y) * (r.x - q.x); });
     return cross.every(v => v > 0) && points.every((p, i) => Math.hypot(p.x - points[(i + 1) % 4].x, p.y - points[(i + 1) % 4].y) >= 12);
+}
+export function wellDistributed(points:Point[]) {
+ let area=0;for(let a=0;a<points.length-2;a++)for(let b=a+1;b<points.length-1;b++)for(let c=b+1;c<points.length;c++)area=Math.max(area,Math.abs((points[b].x-points[a].x)*(points[c].y-points[a].y)-(points[b].y-points[a].y)*(points[c].x-points[a].x))/2);
+ return area>=W*H*.06;
 }
 export function fitMarkers(found: Detection[]) {
     const visible = markers.flatMap(m => {
@@ -92,12 +104,9 @@ export function fitMarkers(found: Detection[]) {
         const rms = (v: Group[number]) => Math.sqrt(distances(v).reduce((s, d) => s + d * d, 0) / 4);
         return { h, inverse, residual, rms };
     };
-    // Deterministic marker-level RANSAC: evaluate every 3-marker hypothesis and
-    // the full 4-marker fit. A marker is an inlier only if all its corners agree.
-    const hypotheses: Group[] = [visible];
-    if (visible.length === 4)
-        for (let i = 0; i < 4; i++)
-            hypotheses.push(visible.filter((_, j) => i !== j));
+    // Exhaustive marker-level consensus, with an all-marker fast path.
+    const hypotheses:Group[]=[visible];
+    for(let a=0;a<visible.length-2;a++)for(let b=a+1;b<visible.length-1;b++)for(let c=b+1;c<visible.length;c++)hypotheses.push([visible[a],visible[b],visible[c]]);
     let best: ReturnType<typeof fit> & {
         error: number;
         ids: number[];
@@ -106,7 +115,7 @@ export function fitMarkers(found: Detection[]) {
         try {
             let model = fit(sample);
             const inliers = visible.filter(v => model.residual(v) <= MAX_REPROJECTION_ERROR);
-            if (inliers.length < 3)
+            if (inliers.length < 3 || !wellDistributed(inliers.map(v=>({x:v.marker.x+SIZE/2,y:v.marker.y+SIZE/2}))))
                 continue;
             model = fit(inliers);
             const errors = inliers.map(v => model.rms(v));
@@ -122,9 +131,10 @@ export function fitMarkers(found: Detection[]) {
             const error = Math.sqrt(errors.reduce((s, e) => s + e * e, 0) / errors.length), ids = inliers.map(v => v.marker.id);
             if (!best || ids.length > best.ids.length || ids.length === best.ids.length && error < best.error)
                 best = { ...model, error, ids };
+            if(ids.length===visible.length)break;
         }
         catch { /* Ignore ill-conditioned hypotheses, never invent a fourth corner. */ }
     if (!best)
         throw Error('Marker fit is not reliable');
-    return { h: best.h, inverse: best.inverse, error: best.error, ids: best.ids, count: best.ids.length, confidence: best.ids.length === 4 && best.error < 2 ? 'high' : 'good' };
+    return { h: best.h, inverse: best.inverse, error: best.error, ids: best.ids, count: best.ids.length, confidence: best.ids.length >= 4 && best.error < 2 ? 'high' : 'good' };
 }

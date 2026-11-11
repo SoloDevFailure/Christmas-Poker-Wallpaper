@@ -2,17 +2,17 @@
 
 These are checks to run, not claims of completed hardware testing.
 
-1. Open deployed PC URL, create wallpaper, enter Fullscreen. All four tags and QR must be visible.
+1. Open deployed PC URL, create wallpaper, enter Fullscreen. All eight tags and QR must be visible.
 2. Scan QR with iPhone, open Safari, confirm Connected.
-3. Manual mode: choose star, tap off-centre, Preview. PC shows a translucent stamp for 10 seconds. Refresh PC: no permanent stamp yet.
+3. Manual mode: enter text/emoji using Aa and Place, tap off-centre, Preview. PC shows a translucent stamp for 10 seconds. Refresh PC: no permanent stamp yet.
 4. Preview and Stamp. Refresh PC: one permanent stamp remains. Rapid double tap must not create duplicates.
-5. Select eggplant, stamp over star, check layering. Join on a second phone and add tree; all clients update.
-6. Enable Debug. Aim with camera and allow rear camera access. Keep all four tags visible. Check green lock, reprojection error, X/Y, rotation, scale and FPS.
+5. Enter different artwork, stamp over the first, check layering. Join on a second phone and add another stamp; all clients update.
+6. Enable Debug. Aim with camera and allow rear camera access. Keep at least three well-distributed tags visible. Check green lock, reprojection error, X/Y, rotation, scale and FPS.
 7. Aim at centre (X/Y approximately .5/.5), Preview and compare camera overlay to PC position. Pinch/rotate and repeat at edges and oblique angles, after phone rotation and PC resize/fullscreen.
-8. Cover any tag: warning and disabled Preview/Stamp. Aim outside wallpaper: disabled. Hide phone tab and resume: reacquire before stamping.
+8. Cover tags until only two remain: warning and disabled Preview/Stamp. Aim outside wallpaper: disabled. Hide phone tab and resume: reacquire before stamping.
 9. Adjust aiming offsets: confirm crosshair and PC preview agree. Reset offsets.
 10. Disconnect/reconnect network: controls follow socket status and stamps reconcile. Retry a failed stamp without changing placement: same UUID, no duplicate.
-11. Export: 1920×1080 PNG, permanent artwork/title/suits, correct stacking; no tags, QR or previews.
+11. Export: 1920×1080 PNG, permanent inner-canvas artwork, correct stacking; no border/title/suits, tags, QR or previews.
 12. Reset from original creator PC: confirmation, all stamps removed, reload confirms empty. Joining phones cannot reset.
 
 ## Supabase integration test
@@ -58,3 +58,13 @@ Verified in the browser against the production preview: session creation, the fu
 45 automated tests pass, covering native keyboard Unicode/ZWJ segmentation, newline/input limits, bounded wrapping, PNG header/payload validation, rectangular camera geometry, scale/rotation/translation and unchanged preset transforms. TypeScript and production build pass.
 
 Pending real-browser/database checks after migration 202611110002_custom_stamps.sql: enter multiline mixed text/emoji, Place, drag/pinch/rotate, preview on another client, stamp, reload PC and export PNG. Verify alpha transparency and matching aspect/appearance in every view. Browser automation stopped because it could not confidently determine the Windows browser URL; the migration was not executed and this addition has not been deployed.
+
+## Camera Stamp and eight-marker border update (current)
+
+- Automated checks: 79 tests cover centred aiming, portrait/landscape and display zoom mapping, centred pinch/rotation, legacy precision screen/world conversion, unchanged stored transforms, inset presentation/export, all distributed three-marker combinations, actual detector frames for eight/seven tags and every three-corner subset in both orientations, outliers and jitter/large motion. The noisy steep-angle extrapolation test now uses 108px markers and bounds error to 12 logical pixels; the original 140px marker test used 8px.
+- Production-browser harness: tests/browser-modes.fixture.tsx uses actual video/canvas/worker detection and PointerEvents with local in-memory submissions. It checks default no-drag, pinch/rotation, camera movement, zoom, legacy anchor/drag/hold/release, invalid-hold cancellation, stream reuse and manual miniature/gestures. Synthetic events stub native pointer capture; this does not validate physical multitouch. The harness is never imported by the application. The older browser-camera fixture exercises legacy mode.
+- Repeat in isolation: create a temporary root qa.html containing a root div and module script /tests/browser-modes.fixture.tsx, then a temporary Vite config with the React plugin, base /, build.rollupOptions.input qa.html and build.outDir dist-qa. Build/preview using that config and open /qa.html at 844×390 and 390×844. An on-page PASS/FAIL reports results. ?wallpaper shows the presentation. Remove temporary HTML/config/output before deployment.
+- Real-device checks still required: reload both PC and phones (new marker IDs), scan the bottom QR at the TV, test 2m then 4m with 3–8 tags, oblique aiming/phone rotation, Safari and Android rear-camera choice, true multitouch, legacy release accuracy and lost-tracking cancellation. Four-metre performance depends on optics, display size, focus and glare. Verify custom-text previews/stamps, reload, second phone and export on that hardware. No new physical-device test has been performed for this update.
+- No new database migration or credentials are required. The user's existing custom-stamp migration and working Supabase flow are retained. Historical verification sections above describe earlier versions.
+
+Current production preview also verified configured Supabase session creation, manual custom PNG creation, preview delivery acknowledgement, permanent stamp submission, live PC stamp count update and persistence after reload. These were desktop-browser checks, not physical phone tracking.

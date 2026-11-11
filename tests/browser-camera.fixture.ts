@@ -8,7 +8,7 @@ const ctx = canvas.getContext('2d')!;
 const dictionary = new Aruco.AR.Dictionary('ARUCO');
 const images = await Promise.all(markers.map(async (m) => { const image = new Image(); image.src = 'data:image/svg+xml,' + encodeURIComponent(dictionary.generateSVG(m.id).replace('viewBox="0 0 9 9"', 'viewBox="1 1 7 7"')); await image.decode(); return image; }));
 let visibleCount = 3;
-function draw() { ctx.fillStyle = '#06281f'; ctx.fillRect(0, 0, W, H); markers.forEach((m, i) => { if (i >= visibleCount)
+function draw() { ctx.fillStyle = '#06281f'; ctx.fillRect(0, 0, W, H); markers.forEach((m, i) => { if (![0,2,5,7,1,3,4,6].slice(0,visibleCount).includes(i))
     return; ctx.fillStyle = 'white'; ctx.fillRect(m.x - 24, m.y - 24, SIZE + 48, SIZE + 48); ctx.drawImage(images[i], m.x, m.y, SIZE, SIZE); }); }
 draw();
 setInterval(draw, 50);
@@ -20,6 +20,7 @@ async function check() {
     result.style.cssText = 'position:fixed;bottom:72px;left:12px;z-index:99;background:#111;color:white;font:11px monospace;padding:8px';
     document.body.append(result);
     try {
+        const mode=document.querySelector('select[aria-label="Placement mode"]') as HTMLSelectElement;if(mode){mode.value='legacy';mode.dispatchEvent(new Event('change',{bubbles:true}));}
         for (let n = 0; n < 150; n++) {
             if (document.querySelector('.tracking-status.locked'))
                 break;

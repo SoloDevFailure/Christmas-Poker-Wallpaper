@@ -1,21 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import Aruco from 'js-aruco2';
-const { AR } = Aruco;
 import QRCode from 'qrcode';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { db, identity, loadStamps, openSession, saveStamp } from './backend';
-import { stampSource, exportArt } from './art';
-import { markers, SIZE, W, H } from './geometry';
-import { type Placement, type Preview, type Session, type Stamp, validPlacement, stampDimensions } from './types';
+import { exportArt } from './art';
+import Wallpaper from './Wallpaper';
+import type {StampSample} from './cameraPlacement';
+import { type Placement, type Preview, type Session, type Stamp, validPlacement } from './types';
 import PhoneController from './PhoneController';
 import { MAX_TRACKING_AGE } from './manipulation';
 const initial: Placement = { stamp_type: 'star', position_x: .5, position_y: .5, scale: 160, rotation: 0 };
-const dictionary = new AR.Dictionary('ARUCO');
-const markerImages = markers.map(m => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(dictionary.generateSVG(m.id).replace('viewBox="0 0 9 9"', 'viewBox="1 1 7 7"')));
-function StampImage({ p, preview = false }: {
-    p: Placement;
-    preview?: boolean;
-}) { const { width, height } = stampDimensions(p); return <image href={stampSource(p)} x={-width / 2} y={-height / 2} width={width} height={height} opacity={preview ? .6 : 1} transform={`translate(${p.position_x * W} ${p.position_y * H}) rotate(${p.rotation})`}/>; }
 export default function App() {
     const phone = location.pathname.replace(/\/$/, '').endsWith('/phone');
     const [code, setCode] = useState(new URLSearchParams(location.search).get('session') || (!phone ? localStorage.getItem('wallpaper-code') || '' : ''));
@@ -131,8 +124,9 @@ export default function App() {
             setError(message(e));
         }
     }
-    async function stamp() {
-        if (!canPlace || sending.current || performance.now() - lastStamp.current < 1000 || camera && performance.now() - lastTracking.current > MAX_TRACKING_AGE)
+    async function stamp(sample?:StampSample) {
+        const submitted=sample?.placement||placement;
+        if (!canPlace || !validPlacement(submitted) || sending.current || performance.now() - lastStamp.current < 1000 || camera && performance.now() - (sample?.at||lastTracking.current) > MAX_TRACKING_AGE)
             return;
         sending.current = true;
         setBusy(true);
@@ -140,7 +134,7 @@ export default function App() {
         const id = requestId.current || crypto.randomUUID();
         requestId.current = id;
         try {
-            await saveStamp(session!.id, placement, id);
+            await saveStamp(session!.id, submitted, id);
             setStamps(await loadStamps(session!.id));
             requestId.current = null;
             lastStamp.current = performance.now();
@@ -193,8 +187,8 @@ export default function App() {
         }
     }
     if (!session)
-        return <main className="setup"><h1>CHRISTMAS POKER 2026</h1><p>{phone ? 'Join the shared wallpaper.' : 'A shared canvas for questionable Christmas creativity.'}</p>{!db && <p className="warning">Supabase is not configured. Add your public project URL and key to .env.local. See README.md.</p>}<form onSubmit={e => { e.preventDefault(); void connect(code.trim()); }}><label>Session code<input value={code} onChange={e => setCode(e.target.value)} autoCapitalize="none" autoCorrect="off" required/></label><button disabled={busy || !db}>Join session</button></form>{!phone && <button disabled={busy || !db} onClick={() => void connect()}>Create new wallpaper</button>}{error && <p role="alert" className="warning">{error}</p>}<p className="muted">Four markers. Three stamps. Absolutely no taste requirements.</p></main>;
-    return <main className={phone ? 'phone-root' : 'desktop'}>{phone ? <PhoneController placement={placement} stamps={stamps} camera={camera} setCamera={enabled => { setLocked(false); setCamera(enabled); }} onChange={change} onCameraPlacement={cameraPlacement} onStatus={setTrackingStatus} online={online} busy={busy} canPlace={canPlace} preview={() => void preview()} stamp={() => void stamp()} notice={notice} error={error} dismissError={() => setError('')}/> : <><div className="wallpaper-wrap"><svg className="wallpaper" viewBox={`0 0 ${W} ${H}`} aria-label="Shared Christmas Poker wallpaper"><rect width={W} height={H} fill="#06281f"/><rect x="24" y="24" width="1872" height="1032" fill="none" stroke="#947940" strokeWidth="3"/>{stamps.map(s => <StampImage key={s.id} p={s}/>)}{Object.values(previews).map(p => <StampImage key={p.sender} p={p} preview/>)}<g className="foreground"><rect x="210" y="45" width="1310" height="150" fill="#06281f"/><text x="960" y="125" textAnchor="middle" fill="#e6cc89" fontFamily="Georgia" fontSize="68" fontWeight="bold">CHRISTMAS POKER 2026</text>{markers.map((m, i) => <g key={m.id}><rect x={m.x - 24} y={m.y - 24} width={SIZE + 48} height={SIZE + 48} fill="white"/><image href={markerImages[i]} x={m.x} y={m.y} width={SIZE} height={SIZE}/><rect x={m.x} y={m.y < 500 ? m.y + SIZE + 16 : m.y - 62} width={SIZE} height="48" fill="#06281f"/><text x={m.x + SIZE / 2} y={m.y < 500 ? m.y + SIZE + 54 : m.y - 22} textAnchor="middle" fontSize="48" fill={i % 2 ? '#ec6c67' : '#e6cc89'}>{m.suit}</text></g>)}<rect x="1510" y="28" width="210" height="245" fill="#fff"/>{qr && <image href={qr} x="1510" y="28" width="210" height="210"/>}<text x="1615" y="259" textAnchor="middle" fontSize="21" fill="#06281f">SCAN TO STAMP</text></g></svg></div><nav className="desktop-tools"><span className={online ? 'good' : 'lost'}>{online ? '● Live' : '● Connecting'}</span><span>{stamps.length} stamps</span><button onClick={() => document.documentElement.requestFullscreen().catch(e => setError(message(e)))}>Fullscreen</button><button onClick={() => void exportArt(stamps).catch(e => setError(message(e)))}>Export PNG</button>{user === session.owner_id && <button disabled={busy} onClick={() => void reset()}>Reset artwork</button>}<a href={phoneUrl} target="_blank" rel="noreferrer">Open phone controller</a></nav></>}
+        return <main className="setup"><h1>CHRISTMAS POKER 2026</h1><p>{phone ? 'Join the shared wallpaper.' : 'A shared canvas for questionable Christmas creativity.'}</p>{!db && <p className="warning">Supabase is not configured. Add your public project URL and key to .env.local. See README.md.</p>}<form onSubmit={e => { e.preventDefault(); void connect(code.trim()); }}><label>Session code<input value={code} onChange={e => setCode(e.target.value)} autoCapitalize="none" autoCorrect="off" required/></label><button disabled={busy || !db}>Join session</button></form>{!phone && <button disabled={busy || !db} onClick={() => void connect()}>Create new wallpaper</button>}{error && <p role="alert" className="warning">{error}</p>}<p className="muted">Eight markers. Unlimited questionable creativity.</p></main>;
+    return <main className={phone ? 'phone-root' : 'desktop'}>{phone ? <PhoneController placement={placement} stamps={stamps} camera={camera} setCamera={enabled => { setLocked(false); setCamera(enabled); }} onChange={change} onCameraPlacement={cameraPlacement} onStatus={setTrackingStatus} online={online} busy={busy} canPlace={canPlace} preview={() => void preview()} stamp={sample => void stamp(sample)} notice={notice} error={error} dismissError={() => setError('')}/> : <><div className="wallpaper-wrap"><Wallpaper stamps={stamps} previews={Object.values(previews)} qr={qr}/></div><nav className="desktop-tools"><span className={online ? 'good' : 'lost'}>{online ? '● Live' : '● Connecting'}</span><span>{stamps.length} stamps</span><button onClick={() => document.documentElement.requestFullscreen().catch(e => setError(message(e)))}>Fullscreen</button><button onClick={() => void exportArt(stamps).catch(e => setError(message(e)))}>Export PNG</button>{user === session.owner_id && <button disabled={busy} onClick={() => void reset()}>Reset artwork</button>}<a href={phoneUrl} target="_blank" rel="noreferrer">Open phone controller</a></nav></>}
     {!phone && error && <p role="alert" className="warning">{error}<button onClick={() => setError('')}>Dismiss</button></p>}
     {!phone && <><label className="debug-toggle"><input type="checkbox" checked={debug} onChange={e => setDebug(e.target.checked)}/>Debug</label>{debug && <pre className="debug">{JSON.stringify({ session: session.id, receivedPreviews: Object.values(previews) }, null, 2)}</pre>}</>}
     </main>;

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { homography, project, fitMarkers, markers, SIZE } from '../src/geometry.ts';
+import { homography, project, fitMarkers, markers, markerCorners } from '../src/geometry.ts';
 import { validPlacement } from '../src/types.ts';
 test('perspective mapping recovers an oblique screen including interior points', () => {
     const h = [.6, .03, 70, .02, .7, 45, .00012, .00008];
@@ -13,14 +13,14 @@ test('perspective mapping recovers an oblique screen including interior points',
 });
 test('four-marker fit uses all corners and rejects ambiguous IDs', () => {
     const h = [.5, .03, 30, .02, .5, 20, .0001, .00003];
-    const found = markers.map(m => ({ id: m.id, corners: [{ x: m.x, y: m.y }, { x: m.x + SIZE, y: m.y }, { x: m.x + SIZE, y: m.y + SIZE }, { x: m.x, y: m.y + SIZE }].map(p => project(h, p)) }));
+    const found = markers.map(m => ({ id: m.id, corners: markerCorners(m).map(p => project(h, p)) }));
     const fit = fitMarkers(found);
     assert.ok(fit.error < .001);
     const q = project(fit.h, project(h, { x: 960, y: 540 }));
     assert.ok(Math.abs(q.x - 960) < .001);
-    assert.equal(fitMarkers(found.slice(1)).count, 3);
-    assert.throws(() => fitMarkers(found.slice(2)));
-    assert.equal(fitMarkers([...found, found[0]]).count, 3);
+    assert.equal(fitMarkers(found.slice(1)).count, 7);
+    assert.throws(() => fitMarkers(found.slice(0,2)));
+    assert.equal(fitMarkers([...found, found[0]]).count, 7);
 });
 test('reject degenerate geometry and invalid placements', () => {
     assert.throws(() => homography(Array(4).fill({ x: 0, y: 0 }), Array(4).fill({ x: 1, y: 1 })));

@@ -1,6 +1,6 @@
 # CHRISTMAS POKER 2026 — Version 0.2
 
-React + TypeScript + Vite prototype with a PC wallpaper, phone camera controller, three consistent transparent SVG stamps, three/four-marker ArUco tracking in a worker, direct sticker gestures and a perspective-aware camera overlay, private Supabase previews, persistent ordered stamps, owner-only reset and PNG export.
+React + TypeScript + Vite prototype with a PC wallpaper, phone camera controller, custom transparent text/emoji PNGs, eight-marker ArUco tracking in a worker, direct sticker gestures and a perspective-aware camera overlay, private Supabase previews, persistent ordered stamps, owner-only reset and PNG export.
 
 ## 1. Configure Supabase
 
@@ -45,20 +45,21 @@ The workflow sets the Vite repository base path, tests/builds and deploys `dist`
 
 1. Create a wallpaper on PC, enter Fullscreen and scan its QR with iPhone.
 2. Open Safari, select a stamp, tap the Manual placement canvas, **Preview on PC**, then **Stamp**. Refresh PC to confirm persistence.
-3. The controller opens in camera mode. Allow rear camera and keep **at least three tags visible**. Four reliable tags are preferred. A compact status shows tracking strength.
-4. Move the phone to aim initially, then drag the sticker with one finger. Two fingers translate, scale and rotate around their centre. After touching, the sticker stays anchored to the wallpaper as the phone moves. **Re-aim** restores camera-centre aiming. Preview checks position; Stamp saves it. Settings holds manual placement, calibration and debugging.
+3. The controller defaults to **Camera Stamp**. Allow the rear camera and show at least three well-distributed tags; additional tags are preferred. Artwork stays phone-centred: physically aim, pinch to resize, rotate with two fingers, then tap Preview or Stamp. One finger does not drag it.
+4. The visible mode selector also offers **Legacy Camera** (world-anchored drag/pinch/rotation; hold Stamp to freeze it in the phone view, release to commit; lost tracking cancels) and **Manual Placement** (no camera permission; live miniature, drag/pinch/rotate and tap Stamp). Switching between camera modes keeps the stream alive. Settings contains debugging and legacy aiming calibration. The 1×/2× button is relative display zoom only; pinch resizes artwork, never the camera.
 5. Overlap another stamp, join with a second phone, export PNG on PC.
 
 PC must show Live and phone Connected. Debug shows tracking metrics and received previews. See [the complete test checklist and optional Supabase integration test](docs/TESTING.md).
 
 ## Tracking contract
 
-- Logical wallpaper: **1920×1080**, centred/aspect-preserving. SVG scales markers and art together through letterboxing, browser resizing and fullscreen.
-- Dictionary: original **ARUCO**, 7×7 including black border, using pinned `js-aruco2@2.0.0`. IDs **17, 133, 271, 409**, clockwise from top-left. Black marker bounds are 140×140 logical pixels plus 24px white quiet zones. Locations: `src/geometry.ts`.
-- Normalized least-squares homography uses **12 or 16 orientation-corrected marker corners**. Deterministic marker-level RANSAC tests the full fit and every available three-marker group; an inlier requires every corner within 4 processed camera pixels. Bad/ambiguous detections are discarded. Four inliers are preferred; fewer than three disables placement. No fourth corner is invented.
-- Camera processing stays on phone, at up to 1280px width, in a worker. No camera frames, gyroscope readings or continuous aiming coordinates go to Supabase. Only explicit previews and saved stamps are sent.
-- X/Y are normalized centre coordinates; scale is logical square side length (32–600 pixels); rotation is clockwise degrees in wallpaper Y-down space. Before touch manipulation, the camera image centre plus calibration is projected onto the board. Once grabbed, the sticker has one wallpaper-space transform. Touches are mapped through the inverse video containment and homography, then apply one similarity transform around the gesture centre. Camera movement only reprojects the anchored sticker; it is not added as another translation.
-- Lost, outside-board or stale tracking disables placement. A last valid overlay can remain visible for up to 250ms during a dropout, but cannot be stamped. Camera frames older than 350ms are rejected; resizing/orientation changes invalidate in-flight results and reacquire without changing the anchored transform. Title, suits, tags and QR stay above all artwork/previews. PNG includes permanent artwork/title/suits, excluding tags/QR/previews.
+- Saved/exported artwork remains **1920×1080**, with unchanged normalized positions, scale and rotation. Presentation insets it at (96,54), size 1728×972, leaving a 5% border. Marker corners are converted from presentation to canvas coordinates before fitting the camera homography; letterboxing/fullscreen do not change this mapping.
+- Eight original ARUCO tags, black bounds 108px plus 24px white quiet zones: IDs **41, 73, 105, 137, 169, 201, 233, 265**, ordered across top, middle sides and bottom. Exact geometry is in src/geometry.ts. IDs differ from the old layout deliberately: reload both PC and phones after deployment.
+- Normalized least-squares fitting uses every corner of each inlier marker, with marker-level consensus over three-marker groups. Three well-distributed tags are required; collinear/clustered sets, ambiguous IDs, malformed quads, horizon crossings and corner residuals above 4 processed pixels are rejected. More consistent markers are preferred. No missing corner is invented.
+- Rear camera requests up to 3840×2160 where available, without changing lens/zoom constraints after opening. Worker receives original uncropped frames downsampled initially to 1280px width, increasing to 1920px when tags are scarce. Slow processing falls back with a cooldown. Display zoom never changes detector input.
+- Camera Stamp maps the phone centre and rotated artwork axes through the display viewport and homography each frame. Legacy stores one world transform; precision hold snapshots its screen centre/size/angle. Existing storage supports translation, uniform scale and rotation, so under oblique perspective the phone overlay reprojects the actual saved planar artwork (it may appear foreshortened), rather than promising a screen rectangle that cannot be saved. Manual uses the same canvas transforms.
+- Small subpixel jitter is smoothed; deliberate motion bypasses smoothing. Lost/outside/stale tracking disables submission. Dropout imagery may remain dimmed for 250ms, but cannot be stamped; frames older than 350ms are rejected. Orientation/resize invalidates in-flight frames and cancels precision holds. Release saves an explicit fresh tracking sample.
+- Only explicit Preview/Stamp actions send placement data to Supabase; no camera images or continuous aiming streams. Markers, title, suits and QR are foreground presentation overlays. **PNG exports include only the inner background and permanent artwork**, excluding the border, controls, overlays and previews.
 
 ## Persistence and reliability
 
@@ -70,9 +71,9 @@ Database rows are the source of truth. Clients load on subscribe, listen for Pos
 
 ## Limitations / verification
 
-This is implemented source, **not a verified real-device demonstration**. All 40 automated tests, TypeScript and the production build passed. Live Supabase checks passed for session isolation, persistence, duplicate UUIDs, private preview broadcasts and owner-only reset. The first private-channel connection failed transiently; the repeat succeeded. Pages output contains real phone and fallback entry files with correct repository asset paths. GitHub deployment and physical iPhone camera tracking remain unverified. [TESTING.md](docs/TESTING.md) records exactly what passed and remains unverified.
+The previous deployed prototype's physical tracking, custom stamps and Supabase flow were confirmed working by the user. This update is checked with automated geometry/detector tests and a production browser using a synthetic camera; it still requires physical TV/phone acceptance. See docs/TESTING.md for the current checks.
 
-Glare, moiré, focus, small tags, oblique angles and lens distortion affect accuracy. Start facing the display directly, fill most of the camera view with the monitor, keep all tags visible and enable Debug. No lens calibration or tracking with fewer than three complete markers yet; older phones may be slow. Stamp centres must stay inside the board; edges may clip.
+Glare, moiré, focus, small tags, oblique angles and lens distortion affect accuracy. Start facing the display directly, fill most of the camera view with the monitor, keep at least three well-distributed tags visible and enable Debug. No lens calibration or tracking with fewer than three complete markers yet; older phones may be slow. Stamp centres must stay inside the board; edges may clip.
 
 Safari/Chrome permission prompts, rear-camera choice and background-tab behavior need physical-device testing. Rear-facing camera is requested as a preference. Camera mode fills the viewport with controls overlaid; switch to Manual to stop it. The PC Fullscreen API may be unavailable on mobile Safari. No native app or installation is needed.
 
@@ -86,10 +87,12 @@ Version 0.2 preserves the database schema and existing stamp transformations. No
 
 ## Custom text and keyboard emoji stamps
 
-The controller retains the three presets and adds an **Aa** button. Enter ordinary text, emojis from the native keyboard, mixed content or up to four lines, then press **Place**. The result uses the same camera/manual controls and preview/stamp flow.
+Use the **Aa** button for custom text/emoji. Existing saved preset stamps still render. Enter ordinary text, emojis from the native keyboard, mixed content or up to four lines, then press **Place**. The result uses the same camera/manual controls and preview/stamp flow.
 
 Text is rasterized once on the originating phone into a transparent PNG using its normal system font/emoji rendering. That exact image is used on the PC and in exports. Input is bounded to 160 UTF-16 characters, images to 512×256 pixels and data URLs to 65,536 characters (at most 48 KiB encoded PNG bytes). Oversized images are downsampled or rejected. Scale represents the longest side; presets keep their existing square sizing and stored coordinates.
 
 **Required additive SQL migration:** run `supabase/migrations/202611110002_custom_stamps.sql` once in the existing project SQL Editor. It adds three nullable fields (PNG data, width and height), accepts the custom stamp type and validates PNG header dimensions/size. Existing session membership/RLS policies remain in force. No Storage bucket, service-role key, new project or separate emoji picker is used. Preset writes continue to work before this migration, but permanent custom stamps require it.
 
-This addition has not been deployed or integration-tested against the database yet. Browser automation stopped before the migration could be run. TypeScript, 45 automated tests and the production build passed; actual browser rasterization, native phone keyboard behavior and saved custom-image preview/export still need verification after applying the migration.
+The custom-stamp migration has already been applied and the feature was reported working on the deployed prototype. This camera/border update requires **no new Supabase migration or configuration**.
+
+At 2–4 metres, detection remains limited by TV size, camera optics, focus, glare and marker pixel size. Digital display zoom does not help detection. At steep angles, three-marker extrapolation amplifies detector noise; the synthetic noisy oblique case is bounded to 12 logical pixels, and additional markers reduce uncertainty. Four-metre reliability is not guaranteed or physically verified.

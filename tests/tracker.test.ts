@@ -2,10 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Aruco from 'js-aruco2';
 const { AR } = Aruco;
-import { fitMarkers, markers, project } from '../src/geometry.ts';
+import { fitMarkers, markers, project, SIZE } from '../src/geometry.ts';
 // Independently rasterize the original ArUco codewords, rather than testing the
-// detector against its own encoder. Cell size is 10px at half wallpaper scale.
-function board(rotate = false, missing?: number): ImageData {
+// detector against its own encoder. Rasterized at half presentation scale.
+function board(rotate = false, missing?: number, only?:number[]): ImageData {
     const width = 960, height = 540, data = new Uint8ClampedArray(width * height * 4);
     function pixel(x: number, y: number, value: number) { const i = (y * width + x) * 4; data[i] = data[i + 1] = data[i + 2] = value; data[i + 3] = 255; }
     for (let y = 0; y < height; y++)
@@ -13,15 +13,15 @@ function board(rotate = false, missing?: number): ImageData {
             pixel(x, y, 25);
     const words = ['10000', '10111', '01001', '01110'];
     for (const m of markers) {
-        if (m.id === missing)
+        if (m.id === missing || only&&!only.includes(m.id))
             continue;
         const left = m.x / 2, top = m.y / 2;
-        for (let y = -12; y < 82; y++)
-            for (let x = -12; x < 82; x++)
+        for (let y = -12; y < SIZE/2+12; y++)
+            for (let x = -12; x < SIZE/2+12; x++)
                 pixel(left + x, top + y, 255);
-        for (let y = 0; y < 70; y++)
-            for (let x = 0; x < 70; x++) {
-                const col = Math.floor(x / 10) - 1, row = Math.floor(y / 10) - 1;
+        for (let y = 0; y < SIZE/2; y++)
+            for (let x = 0; x < SIZE/2; x++) {
+                const col = Math.floor(x / (SIZE/14)) - 1, row = Math.floor(y / (SIZE/14)) - 1;
                 const white = row >= 0 && row < 5 && col >= 0 && col < 5 && words[(m.id >> (2 * (4 - row))) & 3][col] === '1';
                 pixel(left + x, top + y, white ? 255 : 0);
             }
@@ -37,7 +37,7 @@ function board(rotate = false, missing?: number): ImageData {
     return { data: output, width: height, height: width, colorSpace: 'srgb' } as ImageData;
 }
 for (const rotated of [false, true])
-    test(`actual detector recognizes four independently rendered tags${rotated ? ' after 90-degree camera rotation' : ''}`, () => {
+    test(`actual detector recognizes eight independently rendered tags${rotated ? ' after 90-degree camera rotation' : ''}`, () => {
         const detector = new AR.Detector({ dictionaryName: 'ARUCO' }), image = board(rotated);
         const found = detector.detect(image);
         assert.deepEqual(found.map(f => f.id).sort((a, b) => a - b), markers.map(m => m.id).sort((a, b) => a - b));
@@ -48,10 +48,12 @@ for (const rotated of [false, true])
     });
 for (const rotated of [false, true])
     for (const missing of markers)
-        test('actual detector tracks three tags missing ' + missing.id + (rotated ? ' rotated' : ''), () => {
+        test('actual detector tracks seven tags missing ' + missing.id + (rotated ? ' rotated' : ''), () => {
             const found = new AR.Detector({ dictionaryName: 'ARUCO' }).detect(board(rotated, missing.id));
-            assert.equal(found.length, 3);
+            assert.equal(found.length, 7);
             const fit = fitMarkers(found);
-            assert.equal(fit.count, 3);
+            assert.equal(fit.count, 7);
             assert.ok(fit.error < 3);
         });
+
+for(const rotated of [false,true])for(let missing=0;missing<4;missing++)test('real detector tracks each distributed corner triple '+missing+' rotated '+rotated,()=>{const ids=[markers[0],markers[2],markers[5],markers[7]].filter((_,i)=>i!==missing).map(m=>m.id),found=new AR.Detector({dictionaryName:'ARUCO'}).detect(board(rotated,undefined,ids));assert.equal(found.length,3);assert.equal(fitMarkers(found).count,3);});

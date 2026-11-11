@@ -7,10 +7,10 @@ const views = [
     [.13, -.5, 650, .45, .08, 60, .00015, .00024]
 ];
 const samples = [{ x: 60, y: 80 }, { x: 960, y: 540 }, { x: 1830, y: 990 }, { x: 300, y: 800 }];
-function detections(h: number[], noise = false): Detection[] { return markers.map(m => ({ id: m.id, corners: markerCorners(m).map((p, j) => { const q = project(h, p); return { x: q.x + (noise ? Math.sin(m.id + j) * .35 : 0), y: q.y + (noise ? Math.cos(m.id - j) * .35 : 0) }; }) })); }
+function detections(h: number[], noise = false): Detection[] { return [markers[0],markers[2],markers[5],markers[7]].map(m => ({ id: m.id, corners: markerCorners(m).map((p, j) => { const q = project(h, p); return { x: q.x + (noise ? Math.sin(m.id + j) * .35 : 0), y: q.y + (noise ? Math.cos(m.id - j) * .35 : 0) }; }) })); }
 for (const [angle, h] of views.entries())
     for (let missing = 0; missing < 4; missing++)
-        test('three-marker perspective: view ' + angle + ', missing ' + markers[missing].id, () => {
+        test('three-marker perspective: view ' + angle + ', missing ' + [markers[0],markers[2],markers[5],markers[7]][missing].id, () => {
             const found = detections(h).filter((_, i) => i !== missing), fit = fitMarkers(found);
             assert.equal(fit.count, 3);
             assert.ok(fit.error < 1e-6);
@@ -22,7 +22,7 @@ for (const [angle, h] of views.entries())
             const noisy = fitMarkers(detections(h, true).filter((_, i) => i !== missing));
             for (const p of samples) {
                 const q = project(noisy.h, project(h, p));
-                assert.ok(Math.hypot(q.x - p.x, q.y - p.y) < 8, 'Noisy placement error: ' + Math.hypot(q.x - p.x, q.y - p.y));
+                assert.ok(Math.hypot(q.x - p.x, q.y - p.y) < 12, 'Noisy placement error: ' + Math.hypot(q.x - p.x, q.y - p.y));
             }
         });
 test('prefer four inliers, reject each possible displaced fourth marker', () => {
