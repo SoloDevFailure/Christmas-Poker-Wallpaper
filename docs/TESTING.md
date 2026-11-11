@@ -1,0 +1,39 @@
+# Real-device acceptance checks
+
+These are checks to run, not claims of completed hardware testing.
+
+1. Open deployed PC URL, create wallpaper, enter Fullscreen. All four tags and QR must be visible.
+2. Scan QR with iPhone, open Safari, confirm Connected.
+3. Manual mode: choose star, tap off-centre, Preview. PC shows a translucent stamp for 10 seconds. Refresh PC: no permanent stamp yet.
+4. Preview and Stamp. Refresh PC: one permanent stamp remains. Rapid double tap must not create duplicates.
+5. Select eggplant, stamp over star, check layering. Join on a second phone and add tree; all clients update.
+6. Enable Debug. Aim with camera and allow rear camera access. Keep all four tags visible. Check green lock, reprojection error, X/Y, rotation, scale and FPS.
+7. Aim at centre (X/Y approximately .5/.5), Preview and compare camera overlay to PC position. Pinch/rotate and repeat at edges and oblique angles, after phone rotation and PC resize/fullscreen.
+8. Cover any tag: warning and disabled Preview/Stamp. Aim outside wallpaper: disabled. Hide phone tab and resume: reacquire before stamping.
+9. Adjust aiming offsets: confirm crosshair and PC preview agree. Reset offsets.
+10. Disconnect/reconnect network: controls follow socket status and stamps reconcile. Retry a failed stamp without changing placement: same UUID, no duplicate.
+11. Export: 1920×1080 PNG, permanent artwork/title/suits, correct stacking; no tags, QR or previews.
+12. Reset from original creator PC: confirmation, all stamps removed, reload confirms empty. Joining phones cannot reset.
+
+## Supabase integration test
+
+After dependencies and `.env.local` are configured:
+
+```powershell
+node --env-file=.env.local --import tsx scripts/check-supabase.ts
+```
+
+This creates three anonymous test users and two sessions. Checks: persistence, duplicate request UUID, cross-session read/write isolation, private preview broadcast and owner-only reset. Delete its reported empty sessions and auth test users in the dashboard afterwards. It needs network and working Supabase.
+
+Verify **Realtime → Settings → Allow public access** is disabled: otherwise a client could request a public channel and bypass private-channel authorization. Also review/remove unrelated permissive RLS policies if reusing an existing project.
+
+## Verification completed here
+
+- Passed: clean lockfile dependency installation; five automated tests, including actual ArUco detection on independently rasterized markers and a 90-degree camera rotation.
+- Passed: TypeScript and production build using installed Vite 7.x; camera worker bundled successfully.
+- Passed: generated root/phone/404 HTML preserves repository asset paths; workflow uses npm ci with the lockfile and required Pages permissions.
+- Passed against the configured Supabase project: anonymous sign-in, persisted stamps, duplicate UUID protection, cross-session read/write isolation, private preview broadcast and owner-only reset. The first realtime connection returned CHANNEL_ERROR; the repeated integration run passed.
+- Dependency audit: zero reported vulnerabilities after compatible fixes.
+- Local connection values are in ignored .env.local; no credentials were added to tracked source. Built browser files intentionally contain the public project URL/publishable key and are ignored by Git.
+- Not run: actual GitHub deployment, physical iPhone camera tracking, pinch/rotation accuracy, two physical phones or browser PNG export. These need browser/device acceptance testing.
+- Integration checks create anonymous test users and sessions. Remove their test entries in the dashboard when desired.
