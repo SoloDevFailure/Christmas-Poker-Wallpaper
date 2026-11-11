@@ -37,3 +37,9 @@ Verify **Realtime → Settings → Allow public access** is disabled: otherwise 
 - Local connection values are in ignored .env.local; no credentials were added to tracked source. Built browser files intentionally contain the public project URL/publishable key and are ignored by Git.
 - Not run: actual GitHub deployment, physical iPhone camera tracking, pinch/rotation accuracy, two physical phones or browser PNG export. These need browser/device acceptance testing.
 - Integration checks create anonymous test users and sessions. Remove their test entries in the dashboard when desired.
+
+## React startup crash regression
+
+Reproduced React #527 on the deployed site and the local production bundle: React 19.3.1 was paired with react-dom 19.2.8. Both dependencies are now pinned to 19.2.8 in the manifest and lockfile; the production preflight rejects mismatches. App and Camera hooks were reviewed; this failure occurred before component rendering.
+
+Verified in the browser against the production preview: session creation, the full wallpaper/QR/four markers and Live status. Temporary diagnostic builds verified both the outside-React startup catch and the React render boundary. Diagnostic throws were removed before the final build. Seven automated tests cover the existing geometry/detector cases plus real renderer loading and mismatch rejection.

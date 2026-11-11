@@ -7,14 +7,15 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build && node scripts/pages.mjs",
     "test": "tsx --test tests/*.test.ts",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "prebuild": "node scripts/check-react.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.81.1",
     "js-aruco2": "2.0.0",
     "qrcode": "^1.5.4",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

@@ -70,7 +70,7 @@ Database rows are the source of truth. Clients load on subscribe, listen for Pos
 
 ## Limitations / verification
 
-This is implemented source, **not a verified real-device demonstration**. All five automated tests, TypeScript and the production build passed. Live Supabase checks passed for session isolation, persistence, duplicate UUIDs, private preview broadcasts and owner-only reset. The first private-channel connection failed transiently; the repeat succeeded. Pages output contains real phone and fallback entry files with correct repository asset paths. GitHub deployment and physical iPhone camera tracking remain unverified. [TESTING.md](docs/TESTING.md) records exactly what passed and remains unverified.
+This is implemented source, **not a verified real-device demonstration**. All seven automated tests, TypeScript and the production build passed. Live Supabase checks passed for session isolation, persistence, duplicate UUIDs, private preview broadcasts and owner-only reset. The first private-channel connection failed transiently; the repeat succeeded. Pages output contains real phone and fallback entry files with correct repository asset paths. GitHub deployment and physical iPhone camera tracking remain unverified. [TESTING.md](docs/TESTING.md) records exactly what passed and remains unverified.
 
 Glare, moiré, focus, small tags, oblique angles and lens distortion affect accuracy. Start facing the display directly, fill most of the camera view with the monitor, keep all tags visible and enable Debug. No lens calibration or partial-marker recovery yet; older phones may be slow. Stamp centres must stay inside the board; edges may clip.
 
@@ -79,3 +79,5 @@ Safari/Chrome permission prompts, rear-camera choice and background-tab behavior
 For wider public use, add CAPTCHA/rate limits, invitation rotation and moderation. Sessions and anonymous accounts are not automatically expired/cleaned up.
 
 References: [js-aruco2](https://github.com/damianofalcioni/js-aruco2), [Supabase private Realtime authorization](https://supabase.com/docs/guides/realtime/authorization).
+
+React and react-dom are pinned to the same exact version. `npm run build` checks runtime compatibility before bundling. Startup import failures and component rendering failures show visible messages with reload controls. The production wallpaper has been verified in a browser; physical iPhone tracking remains a separate acceptance test.
