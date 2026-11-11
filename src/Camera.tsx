@@ -3,6 +3,8 @@ import { markerCorners, homography, markers, project, W, H, type Point } from '.
 import { MAX_TRACKING_AGE, videoViewport, viewToImage, imageToView, onVideo, manipulate, stickerCorners, type Gesture } from './manipulation';
 import { validPlacement, stampAsset, type Placement } from './types';
 import { stampSource } from './art';
+import TrackingDebug from './TrackingDebugger';
+import {emptyDebug,frameMarkerDecisions,type DebugSnapshot} from './trackingDebug';
 import {TrackingState,processingFrame,processingBudget,FRAME_PAUSE} from './trackingState';
 import { phoneFixedPlacement,screenStampFromWorld,resizePhoneStamp,smoothTracking,trackingMotion,phoneReference,type CameraHandle,type ScreenStamp } from './cameraPlacement';
 type Pose = {
@@ -20,6 +22,7 @@ type Props = {
     onPlacement: (p: Placement | null, at?: number) => void;
     onStatus: (s: string) => void;
     debug: boolean;
+    trackingDebug:boolean;
     onMetrics: (metrics: Record<string, unknown>) => void;
     calibration: Point;
     aimReset: number;
@@ -35,6 +38,8 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
     const pointers = useRef(new Map<number, Point>()), gesture = useRef<Gesture | null>(null);
     const [pose, setPose] = useState<Pose | null>(null), [overlay, setOverlay] = useState(props.placement), [size, setSize] = useState({ width: 0, height: 0 });
     const [status, setStatus] = useState('Opening camera…'), [phase, setPhase] = useState('lost'), [metrics, setMetrics] = useState<Record<string,unknown>>({});
+    const debugSnapshot=useRef<DebugSnapshot>({...emptyDebug}),[debugView,setDebugView]=useState<DebugSnapshot>({...emptyDebug}),[debugNow,setDebugNow]=useState(0);
+    useEffect(()=>{if(!props.trackingDebug)return;const refresh=()=>{setDebugView({...debugSnapshot.current});setDebugNow(performance.now());};refresh();const timer=setInterval(refresh,125);return()=>clearInterval(timer);},[props.trackingDebug]);
     const [displayZoom,setDisplayZoom]=useState<1|2>(2);
     const zoomRef=useRef<1|2>(2);
     const phoneControls=useRef({size:.56,rotation:0}),phoneGesture=useRef<{base:{size:number;rotation:number};points:Point[]}|null>(null),precision=useRef<ScreenStamp|null>(null);
@@ -48,7 +53,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
     const previousReset = useRef(props.aimReset);
     useEffect(() => {
         if (props.debug)
-            latest.current.onMetrics({ ...metrics, x: overlay.position_x, y: overlay.position_y, scale: overlay.scale, rotation: overlay.rotation, mode: precision.current ? 'precision hold' : props.mode });
+            latest.current.onMetrics({ ...metrics, x: overlay.position_x, y: overlay.position_y, scale: overlay.scale, rotation: overlay.rotation, mode: precision.current ? 'precision hold' : props.mode, lastRejectedMarkers:props.trackingDebug?debugSnapshot.current.lastFailure?.markers.map(({id,status,reason,residual})=>({id,status,reason,residual})):undefined, markerDecisions:props.trackingDebug?frameMarkerDecisions(debugSnapshot.current.markers,debugSnapshot.current.acceptedIds,debugSnapshot.current.reason).map(({id,status,reason,residual})=>({id,status,reason,residual})):undefined });
     }, [props.debug, metrics, overlay]);
     const publishRef = useRef<(p: Placement, at: number) => void>(() => { });
     publishRef.current = (p, at) => { artwork.current = p; setOverlay(p); latest.current.onPlacement(validPlacement(p) ? p : null, at); };
@@ -76,11 +81,14 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
         const report = (text: string, kind: string) => { setStatus(text); setPhase(kind); latest.current.onStatus(text); };
         const tracking=new TrackingState();
         let lastRejection='',lastFrame:Record<string,unknown>={},reportedPhase='lost';
-        function diagnostics(){const state=tracking.read(performance.now());setMetrics({...lastFrame,state:state.phase,rejection:tracking.reason,lastRejection,stampable:state.stampable&&validPlacement(artwork.current),placementValid:validPlacement(artwork.current)});}
+        let lastValidAt:number|null=null,rejectionDetail='';
+        function diagnostics(){const state=tracking.read(performance.now());if(latest.current.trackingDebug){debugSnapshot.current={...debugSnapshot.current,phase:state.phase,reason:tracking.reason,detail:rejectionDetail,lastValidAt,acceptedIds:state.stampable?(poseRef.current?.ids||[]):[]};}setMetrics({...lastFrame,state:state.phase,rejection:tracking.reason,lastRejection,stampable:state.stampable&&validPlacement(artwork.current),placementValid:validPlacement(artwork.current)});}
         const invalidate = (text: string,reason='temporary-dropout',immediate=false) => {
             const state=tracking.reject(reason,performance.now(),immediate);
-            lastRejection=text+' ('+reason+')';
+            lastRejection=text+' ('+reason+')';rejectionDetail=text;
+            if(latest.current.trackingDebug)debugSnapshot.current={...debugSnapshot.current,lastFailure:{at:performance.now(),reason:lastRejection,markers:frameMarkerDecisions(debugSnapshot.current.markers,[],reason)}};
             live.current=false;cancelPrecision();latest.current.onPlacement(null);
+            if(immediate)debugSnapshot.current={...debugSnapshot.current,draw:false,markers:[]};
             pointers.current.clear();gesture.current=null;
             setPose(state.phase==='holding'?poseRef.current:null);
             report(state.phase==='holding'?'Tracking · recovering':text,state.phase);
@@ -134,7 +142,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                     canvas.width=dimensions.width;canvas.height=dimensions.height;
                     ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
                     const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                    worker!.postMessage({ buffer: data.data.buffer, width: canvas.width, height: canvas.height, at: performance.now(), epoch: epoch.current,aim:latest.current.mode==='legacy'?{x:canvas.width*(.5+latest.current.calibration.x),y:canvas.height*(.5+latest.current.calibration.y)}:undefined }, [data.data.buffer]);
+                    worker!.postMessage({ buffer: data.data.buffer, width: canvas.width, height: canvas.height, at: performance.now(), epoch: epoch.current,trackingDebug:latest.current.trackingDebug,aim:latest.current.mode==='legacy'?{x:canvas.width*(.5+latest.current.calibration.x),y:canvas.height*(.5+latest.current.calibration.y)}:undefined }, [data.data.buffer]);
                 };
                 worker.onerror = () => { terminalError = 'Camera tracking failed · use Options to retry or place manually'; invalidate(terminalError,'worker-error',true); };
                 worker.onmessage = ({ data }) => {
@@ -142,7 +150,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                         return;
                     const now = performance.now(), fps = 1000 / (now - last);
                     last = now;
-                                        const found = data.found || [], detected = markers.filter(m => found.some((f: {
+                    const found = data.found || [], detected = markers.filter(m => found.some((f: {
                         id: number;
                     }) => f.id === m.id)).length;
                     const tagEdges=found.filter((f:{id:number;corners:Point[]})=>markers.some(m=>m.id===f.id)&&f.corners?.length===4).flatMap((f:{corners:Point[]})=>f.corners.map((p:Point,i:number)=>Math.hypot(p.x-f.corners[(i+1)%4].x,p.y-f.corners[(i+1)%4].y)));
@@ -151,6 +159,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                     const nextBudget=processingBudget(processingSize,now-data.at,needDetail);
                     if(nextBudget!==processingSize&&(nextBudget<processingSize||now-lastResolutionChange>2000)){lastResolutionChange=now+(nextBudget<processingSize?8000:0);processingSize=nextBudget;}
                     lastFrame={smallestTagPixels:Math.round(smallestTag),resolution:v.videoWidth+' × '+v.videoHeight,processingResolution:data.width+' × '+data.height,processingMs:Math.round(now-data.at),fps:Math.round(fps),detected:found.length,matched:detected,usable:data.usable||0,inliers:data.fit?.count||0,accepted:0,reprojectionError:data.fit?.error??null,tolerance:data.fit?.tolerance??null,confidence:data.fit?.confidence??null};
+                    if(latest.current.trackingDebug){debugSnapshot.current={...debugSnapshot.current,markers:data.trace?.markers||[],detected:found.length,acceptedIds:[],error:data.fit?.error??null,check:data.trace?.check||'',width:data.width||0,height:data.height||0,capture:v.videoWidth+' × '+v.videoHeight,at:data.at??null,draw:data.epoch===epoch.current&&Math.abs(data.width/data.height-v.videoWidth/v.videoHeight)<.01};}
                     let rejectReason='poor-homography';
                     try {
                         if(data.error){rejectReason='worker-error';throw Error(data.error);}
@@ -168,7 +177,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                         const local=[{x:centre.x-r,y:centre.y-r},{x:centre.x+r,y:centre.y-r},{x:centre.x+r,y:centre.y+r},{x:centre.x-r,y:centre.y+r}].map(q=>project(raw.h,q));
                         const p=smoothTracking(raw,previous,local);
 
-                        poseRef.current=p;live.current=true;tracking.accept(p.at,now);lastFrame.accepted=fit.count;
+                        poseRef.current=p;live.current=true;tracking.accept(p.at,now);lastFrame.accepted=fit.count;lastValidAt=now;rejectionDetail='';
                         let next=artwork.current;
                         if(latest.current.mode==='camera-stamp'||precision.current)next=updatePhone(p);
                         else if(!anchored.current){const q=project(p.h,{x:p.width*(.5+latest.current.calibration.x),y:p.height*(.5+latest.current.calibration.y)});next={...next,position_x:q.x/W,position_y:q.y/H};anchored.current=true;}
@@ -251,6 +260,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
       <video ref={video} muted playsInline aria-label="Rear camera" style={{transform: 'scale('+displayZoom+')',transformOrigin:'50% 50%'}}/>
       <img className="camera-stamp" src={stampSource(props.placement)} alt="Selected sticker" style={{ transform, display: transform ? 'block' : 'none', opacity: phase === 'holding' ? .35 : .85 }}/>
       {crosshair && <span className="crosshair" style={{ left: crosshair.x, top: crosshair.y }}>+</span>}
+      {props.trackingDebug&&<TrackingDebug snapshot={debugView} now={debugNow} width={size.width} height={size.height} zoom={displayZoom}/>}
     </div>
     <button className="display-zoom" aria-label="Display zoom" aria-pressed={displayZoom===2} title="Relative display zoom; tracking uses the full frame" disabled={props.disabled} onClick={toggleDisplayZoom}>{displayZoom}×</button>
     <p className={'tracking-status ' + phase} role="status">{status}</p>

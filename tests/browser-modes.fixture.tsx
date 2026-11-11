@@ -10,9 +10,11 @@ import '../src/style.css';
 const canvas=document.createElement('canvas');canvas.width=W;canvas.height=H;const ctx=canvas.getContext('2d')!;
 const dictionary=new Aruco.AR.Dictionary('ARUCO');
 const images=await Promise.all(markers.map(async m=>{const image=new Image();image.src='data:image/svg+xml,'+encodeURIComponent(dictionary.generateSVG(m.id).replace('viewBox="0 0 9 9"','viewBox="1 1 7 7"'));await image.decode();return image;}));
+const unknownImage=new Image();unknownImage.src='data:image/svg+xml,'+encodeURIComponent(dictionary.generateSVG(999).replace('viewBox="0 0 9 9"','viewBox="1 1 7 7"'));await unknownImage.decode();
+let showUnknown=false;
 let selection:number[]|null=null;
 let count=8,offset=0,requests=0,last:Placement|null=null,saved:Placement[]=[],manual=false;
-function draw(){ctx.fillStyle='#06281f';ctx.fillRect(0,0,W,H);ctx.save();ctx.translate(96+offset,54);ctx.scale(.9,.9);(selection||[0,2,5,7,1,3,4,6]).slice(0,count).forEach(i=>{const m=markers[i];ctx.fillStyle='white';ctx.fillRect(m.x-24,m.y-24,SIZE+48,SIZE+48);ctx.drawImage(images[i],m.x,m.y,SIZE,SIZE);});ctx.restore();}
+function draw(){ctx.fillStyle='#06281f';ctx.fillRect(0,0,W,H);ctx.save();ctx.translate(96+offset,54);ctx.scale(.9,.9);(selection||[0,2,5,7,1,3,4,6]).slice(0,count).forEach(i=>{const m=markers[i];ctx.fillStyle='white';ctx.fillRect(m.x-24,m.y-24,SIZE+48,SIZE+48);ctx.drawImage(images[i],m.x,m.y,SIZE,SIZE);});if(showUnknown){ctx.fillStyle='white';ctx.fillRect(W/2-78,H/2-78,156,156);ctx.drawImage(unknownImage,W/2-54,H/2-54,108,108);}ctx.restore();}
 draw();setInterval(draw,40);
 Object.defineProperty(navigator.mediaDevices,'getUserMedia',{configurable:true,value:async()=>{requests++;return canvas.captureStream(20);}});
 function Harness(){const [p,setP]=useState<Placement>({stamp_type:'star',position_x:.5,position_y:.5,scale:160,rotation:0}),[camera,setCamera]=useState(true),[locked,setLocked]=useState(false),[stamps,setStamps]=useState<Stamp[]>([]);
@@ -28,6 +30,13 @@ async function check(){const output=document.createElement('output');output.id='
  async function choose(value:string){(document.querySelector('button[aria-label="Options"]') as HTMLElement).click();await wait(50);const select=document.querySelector('select')!;select.value=value;select.dispatchEvent(new Event('change',{bubbles:true}));await wait(80);}
  const nearly=(a:number,b:number,t=.002)=>Math.abs(a-b)<t;
  try{await locked();ensure(!document.querySelector('select'),'Mode selector leaked onto main screen');ensure(document.querySelector('.display-zoom')?.textContent==='2×','Camera did not start at 2×');const stage=document.querySelector('.camera-view') as HTMLElement;const centre={x:innerWidth/2,y:innerHeight/2};const original={...last!};
+ ensure(!document.querySelector('.tracking-debug'),'Tracking Debug was not disabled by default');
+ (document.querySelector('button[aria-label="Options"]') as HTMLElement).click();await wait(60);
+ const toggle=[...document.querySelectorAll('label')].find(l=>l.textContent==='Tracking Debug')?.querySelector('input');ensure(toggle,'Tracking Debug toggle missing');(toggle as HTMLElement).click();await wait(60);(document.querySelector('button[aria-label="Close options"]') as HTMLElement).click();await wait(300);
+ ensure(document.querySelectorAll('[data-marker-status="accepted"]').length===8,'Accepted outlines missing');
+ ensure(getComputedStyle(document.querySelector('.tracking-debug')!).pointerEvents==='none','Debugger intercepts gestures');
+ showUnknown=true;draw();await wait(300);const unknown=document.querySelector('[data-marker-id="999"]');ensure(unknown?.getAttribute('data-marker-status')==='rejected'&&unknown.textContent?.includes('Unknown marker ID'),'Unknown tag not shown as rejected');showUnknown=false;draw();await wait(180);
+
  for(const n of [5,8,5,8]){count=n;draw();await wait(230);ensure(!!document.querySelector('.tracking-status.locked'),'Five/eight marker transition lost tracking');}
  selection=[0,1,2];count=3;draw();await wait(300);ensure(!!document.querySelector('.tracking-status.locked'),'Three top-edge tags were rejected');selection=null;count=8;draw();await wait(230);
 
@@ -43,5 +52,5 @@ async function check(){const output=document.createElement('output');output.id='
  count=3;draw();await locked();await choose('camera-stamp');await wait(180);ensure(requests===1,'Camera restarted after recovery');await choose('manual');await wait(180);ensure(manual&&!document.querySelector('video')&&document.querySelectorAll('.manual image').length===3,'Manual miniature missing saved stamps');
  const mini=document.querySelector('.manual') as HTMLElement,r=mini.getBoundingClientRect(),beforeDrag=last!.position_x;pointer(mini,'pointerdown',1,r.x+r.width*beforeDrag,r.y+r.height*last!.position_y);pointer(mini,'pointermove',1,r.x+r.width*(beforeDrag+.05),r.y+r.height*last!.position_y);pointer(mini,'pointerup',1,r.x+r.width*(beforeDrag+.05),r.y+r.height*last!.position_y);await wait(50);ensure(nearly(last!.position_x,beforeDrag+.05),'Manual drag failed');
  const manualBefore=last!.scale;pointer(mini,'pointerdown',1,r.x+r.width*.45,r.y+r.height*.5);pointer(mini,'pointerdown',2,r.x+r.width*.55,r.y+r.height*.5);pointer(mini,'pointermove',1,r.x+r.width*.4,r.y+r.height*.5);pointer(mini,'pointermove',2,r.x+r.width*.6,r.y+r.height*.5);pointer(mini,'pointerup',2,0,0);pointer(mini,'pointerup',1,0,0);await wait(80);ensure(nearly(last!.scale,Math.min(600,manualBefore*2),2),'Manual pinch failed');
- output.textContent='PASS: 5/8 marker transitions + three-tag edge view + default 2× + Options modes + centred gestures + legacy hold + safe dropout + manual placement';
+ output.textContent='PASS: opt-in actual-corner debugger + accepted/unknown IDs + zoom alignment + gestures/stamping + three-tag tracking + legacy/manual modes';
  }catch(e){output.textContent='FAIL: '+String(e);console.error(e);}}

@@ -12,3 +12,5 @@
 @media(orientation:landscape){.manual{width:min(100%,calc((100dvh - 180px)*16/9));margin:auto}}
 
 .phone-settings select{min-width:0;max-width:100%;flex:1;min-height:44px;border:1px solid #827346;border-radius:8px;background:#071c15;color:#f4e3b4;padding:6px;font:inherit}
+
+.tracking-debug,.marker-outlines{position:absolute;inset:0;width:100%;height:100%;pointer-events:none!important;user-select:none}.tracking-debug{z-index:1;overflow:hidden}.marker-outlines{overflow:hidden}.tracking-debug-panel{position:absolute;top:110px;left:max(8px,env(safe-area-inset-left));max-width:min(310px,80vw);max-height:calc(100% - 200px);overflow:hidden;padding:7px;border:1px solid #ffffff55;border-radius:6px;background:#06110ee8;color:#fff;font:10px/1.3 ui-monospace,monospace;overflow-wrap:anywhere;pointer-events:none!important}.tracking-debug-panel strong{display:block}.tracking-debug-panel ul{list-style:none;padding:0;margin:4px 0 0}.tracking-debug *{pointer-events:none!important}@media(orientation:landscape){.tracking-debug-panel{top:92px;max-width:310px;max-height:calc(100% - 165px);font-size:9px}}

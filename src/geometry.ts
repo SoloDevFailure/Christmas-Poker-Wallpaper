@@ -72,6 +72,8 @@ export type Detection = {
     id: number;
     corners: Point[];
 };
+export type MarkerDiagnostic=Detection & {status:'accepted'|'rejected'|'pending';reason:string;residual?:number};
+export type FitDiagnostics={markers:MarkerDiagnostic[];candidateIds:number[];check:string};
 export const MAX_REPROJECTION_ERROR = 4;
 export function markerCorners(m: typeof markers[number]): Point[] {
     return [{ x: m.x, y: m.y }, { x: m.x + SIZE, y: m.y }, { x: m.x + SIZE, y: m.y + SIZE }, { x: m.x, y: m.y + SIZE }].map(presentationToCanvas);
@@ -93,17 +95,30 @@ export function usableGeometry(points:Point[]) {
  let xx=0,xy=0,yy=0;for(const p of points){xx+=(p.x-cx)**2;xy+=(p.x-cx)*(p.y-cy);yy+=(p.y-cy)**2;}
  const trace=xx+yy;return Number.isFinite(trace)&&trace>0&&(xx*yy-xy*xy)/(trace*trace)>1e-4;
 }
-export function fitMarkers(found: Detection[],frame?:{width:number;height:number;aim?:Point}) {
+export function fitMarkers(found: Detection[],frame?:{width:number;height:number;aim?:Point},trace?:FitDiagnostics) {
     const detected=markers.filter(m=>found.some(f=>f.id===m.id)).length;
     const tolerance=MAX_REPROJECTION_ERROR*(frame?Math.max(frame.width,frame.height)/1280:1);
+    if(trace){trace.candidateIds=[];trace.check='';trace.markers=found.map(f=>{
+        let reason='';
+        if(!markers.some(m=>m.id===f.id))reason='Unknown marker ID';
+        else if(found.filter(v=>v.id===f.id).length!==1)reason='Duplicate marker ID (ambiguous)';
+        else if(!soundQuad(f.corners)){
+            if(f.corners.length!==4)reason='Incomplete marker: four corners required';
+            else if(f.corners.some(p=>!Number.isFinite(p.x)||!Number.isFinite(p.y)))reason='Non-finite corner coordinates';
+            else {const crosses=f.corners.map((p,i)=>{const q=f.corners[(i+1)%4],r=f.corners[(i+2)%4];return(q.x-p.x)*(r.y-q.y)-(q.y-p.y)*(r.x-q.x);});reason=crosses.some(v=>v<=0)?'Non-convex or reversed corner geometry':'Marker edge below 12 px';}
+        }
+        return {...f,status:reason?'rejected':'pending',reason:reason||'Awaiting homography validation'};
+    });}
     const visible = markers.flatMap(m => {
         const matches = found.filter(f => f.id === m.id);
         // Duplicate IDs are ambiguous, even when one candidate looks plausible.
         // An ambiguous ID is discarded; three other complete markers can still track.
         return matches.length === 1 && soundQuad(matches[0].corners) ? [{ marker: m, camera: matches[0].corners }] : [];
     });
-    if (visible.length < 3)
+    if (visible.length < 3){
+        if(trace){trace.check=detected<3?'Fewer than 3 known marker IDs':'Fewer than 3 usable complete markers';trace.markers.forEach(m=>{if(m.status==='pending'){m.status='rejected';m.reason=trace.check;}});}
         throw new TrackingError(detected<3?'insufficient-markers':'invalid-marker-geometry',detected<3?'Show at least 3 markers':'Detected tags are too small, malformed or ambiguous',detected,visible.length);
+    }
     type Group = typeof visible;
     const fit = (group: Group) => {
         const board = group.flatMap(v => markerCorners(v.marker)), camera = group.flatMap(v => v.camera);
@@ -113,6 +128,14 @@ export function fitMarkers(found: Detection[],frame?:{width:number;height:number
         const rms = (v: Group[number]) => Math.sqrt(distances(v).reduce((s, d) => s + d * d, 0) / 4);
         return { h, inverse, residual, rms };
     };
+    let candidate:{model:ReturnType<typeof fit>;ids:number[];cost:number;check:string}|undefined;
+    // Observational only: never used by model selection or acceptance checks.
+    function note(model:ReturnType<typeof fit>,check:string){
+        if(!trace)return;
+        const errors=visible.map(v=>model.residual(v)),ids=visible.filter((_,i)=>errors[i]<=tolerance).map(v=>v.marker.id);
+        const cost=errors.slice().sort((a,b)=>a-b).slice(0,3).reduce((s,v)=>s+v,0);
+        if(!candidate||ids.length>candidate.ids.length||ids.length===candidate.ids.length&&cost<candidate.cost)candidate={model,ids,cost,check};
+    }
     // Exhaustive marker-level consensus, with an all-marker fast path.
     const hypotheses:Group[]=[visible];
     for(let a=0;a<visible.length-2;a++)for(let b=a+1;b<visible.length-1;b++)for(let c=b+1;c<visible.length;c++)hypotheses.push([visible[a],visible[b],visible[c]]);
@@ -125,8 +148,8 @@ export function fitMarkers(found: Detection[],frame?:{width:number;height:number
         try {
             let model = fit(sample);
             let inliers = visible.filter(v => model.residual(v) <= tolerance);
-            if(inliers.length<3)continue;
-            if(!usableGeometry(inliers.flatMap(v=>markerCorners(v.marker)))||!usableGeometry(inliers.flatMap(v=>v.camera))){geometryRejected=true;continue;}
+            if(inliers.length<3){note(model,'Fewer than 3 tags within the corner reprojection limit');continue;}
+            if(!usableGeometry(inliers.flatMap(v=>markerCorners(v.marker)))||!usableGeometry(inliers.flatMap(v=>v.camera))){geometryRejected=true;note(model,'Degenerate marker corner footprint');continue;}
             model = fit(inliers);
             // Refitting a consensus can push one marginal tag outside the bound.
             // Trim that genuine outlier and refit instead of discarding the solution.
@@ -134,18 +157,16 @@ export function fitMarkers(found: Detection[],frame?:{width:number;height:number
                 const worst=inliers.reduce((a,b)=>model.residual(a)>model.residual(b)?a:b);
                 inliers=inliers.filter(v=>v!==worst);model=fit(inliers);
             }
-            if(!usableGeometry(inliers.flatMap(v=>markerCorners(v.marker)))||!usableGeometry(inliers.flatMap(v=>v.camera)))continue;
+            if(!usableGeometry(inliers.flatMap(v=>markerCorners(v.marker)))||!usableGeometry(inliers.flatMap(v=>v.camera))){note(model,'Degenerate corner footprint after refit');continue;}
             const errors = inliers.map(v => model.rms(v));
-            if (inliers.some(v => model.residual(v) > tolerance))
-                continue;
-            if (errors.some(e => !Number.isFinite(e) || e > tolerance))
-                continue;
+            if (inliers.some(v => model.residual(v) > tolerance)){note(model,'Corner reprojection error above limit after refit');continue;}
+            if (errors.some(e => !Number.isFinite(e) || e > tolerance)){note(model,'Non-finite or excessive homography reprojection error');continue;}
             // Validate the observed footprint and local aiming point. Unseen parts
             // of a plane may cross the camera horizon during a legitimate close-up.
             const board=inliers.flatMap(v=>markerCorners(v.marker));
             const denominators=board.map(p=>model.inverse[6]*p.x+model.inverse[7]*p.y+1);
             const sign=Math.sign(denominators[0]);
-            if(!denominators.every(v=>Number.isFinite(v)&&v*sign>1e-6))continue;
+            if(!denominators.every(v=>Number.isFinite(v)&&v*sign>1e-6)){note(model,'Homography horizon crosses observed markers');continue;}
             if(frame){
                 const aim=frame.aim||{x:frame.width/2,y:frame.height/2};
                 const radius=Math.max(4,Math.min(frame.width,frame.height)*.015);
@@ -153,23 +174,37 @@ export function fitMarkers(found: Detection[],frame?:{width:number;height:number
                 const z=local.map(p=>model.h[6]*p.x+model.h[7]*p.y+1);
                 const points=local.map(p=>project(model.h,p));
                 // Local orientation/convexity, finite coordinates, no horizon near aim.
-                if(!z.every(v=>Number.isFinite(v)&&v*z[0]>0)||points.some(p=>!Number.isFinite(p.x)||!Number.isFinite(p.y))) {projectionRejected=true;continue;}
+                if(!z.every(v=>Number.isFinite(v)&&v*z[0]>0)||points.some(p=>!Number.isFinite(p.x)||!Number.isFinite(p.y))) {projectionRejected=true;note(model,'Aim crosses the homography horizon or is non-finite');continue;}
                 const crosses=points.map((p,i)=>{const q=points[(i+1)%4],r=points[(i+2)%4];return (q.x-p.x)*(r.y-q.y)-(q.y-p.y)*(r.x-q.x);});
-                if(!crosses.every(v=>v>0)){projectionRejected=true;continue;}
+                if(!crosses.every(v=>v>0)){projectionRejected=true;note(model,'Aim projection flips or collapses');continue;}
                 // A tag-only fit must also predict the aim consistently when any
                 // one tag is omitted. This catches unsafe extrapolation from a
                 // thin close-up footprint without requiring distant screen corners.
                 const centre=project(model.h,aim);
                 const worldPixel= Math.max(...points.map(p=>Math.hypot(p.x-centre.x,p.y-centre.y)))/(radius*Math.SQRT2);
                 const limit=Math.max(6,2*tolerance)*worldPixel;
-                if(inliers.some((_,i)=>{try{const leave=fit(inliers.filter((_,j)=>i!==j)),q=project(leave.h,aim);return Math.hypot(q.x-centre.x,q.y-centre.y)>limit;}catch{return true;}})){projectionRejected=true;continue;}
+                if(inliers.some((_,i)=>{try{const leave=fit(inliers.filter((_,j)=>i!==j)),q=project(leave.h,aim);return Math.hypot(q.x-centre.x,q.y-centre.y)>limit;}catch{return true;}})){projectionRejected=true;note(model,'Leave-one-tag-out aim consistency check failed');continue;}
             }
             const error = Math.sqrt(errors.reduce((s, e) => s + e * e, 0) / errors.length), ids = inliers.map(v => v.marker.id);
             if (!best || ids.length > best.ids.length || ids.length === best.ids.length && error < best.error)
                 best = { ...model, error, ids };
             if(ids.length===visible.length)break;
         }
-        catch { /* Ignore ill-conditioned hypotheses, never invent a fourth corner. */ }
+        catch(e) { if(trace&&!candidate)trace.check='Invalid homography: '+(e instanceof Error?e.message:String(e)); /* Ignore ill-conditioned hypotheses, never invent a fourth corner. */ }
+    if(trace){
+        const reference=best||candidate?.model;
+        trace.candidateIds=best?.ids||candidate?.ids||[];
+        trace.check=best?'':candidate?.check||trace.check||'No valid homography';
+        for(const marker of trace.markers){
+            if(marker.status==='rejected')continue;
+            const v=visible.find(v=>v.marker.id===marker.id);
+            if(reference&&v)marker.residual=reference.residual(v);
+            if(best?.ids.includes(marker.id)){marker.status='accepted';marker.reason='Used by accepted homography';}
+            else if(best){marker.status='rejected';marker.reason=marker.residual!==undefined&&marker.residual>tolerance?'Corner error '+marker.residual.toFixed(2)+' px > '+tolerance.toFixed(2)+' px':'Excluded by robust consensus';}
+            else if(candidate&&candidate.ids.length<3&&candidate.ids.includes(marker.id)){marker.status='pending';marker.reason='Candidate only: fewer than 3 consistent tags';}
+            else {marker.status='rejected';marker.reason=marker.residual!==undefined&&marker.residual>tolerance?'Candidate corner error '+marker.residual.toFixed(2)+' px > '+tolerance.toFixed(2)+' px':'Frame rejected: '+trace.check;}
+        }
+    }
     if (!best)
         throw new TrackingError(projectionRejected?'invalid-projection':geometryRejected?'invalid-marker-geometry':'poor-homography',projectionRejected?'Aim is outside reliable marker geometry':geometryRejected?'Show markers with more visible corner area':'Marker corners do not agree on a perspective',detected,visible.length);
     return { h: best.h, inverse: best.inverse, error: best.error, ids: best.ids, count: best.ids.length, usable:visible.length,detected,tolerance,confidence: best.ids.length >= 4 && best.error < tolerance/2 ? 'high' : 'good' };
