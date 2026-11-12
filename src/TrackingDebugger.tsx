@@ -8,7 +8,7 @@ export default memo(function TrackingDebug({snapshot:s,now,width,height,zoom}:{s
  const state=s.phase==='lost'||validAge===null||validAge>RECOVERY_HOLD?'LOST':s.phase==='locked'&&!expired?'VALID':'HELD';
  const ids=state==='VALID'&&!expired?s.acceptedIds:[];
  const markers=frameMarkerDecisions(s.markers,ids,expired?'stale-frame':s.reason);
- const reason=expired?'stale-frame: no fresh camera result':s.reason+(s.detail?' · '+s.detail:'');
+ const reason=[s.reason+(s.detail?' · '+s.detail:''),expired?'no fresh camera result':''].filter(Boolean).join(' · ');
  const fresh=s.draw&&!expired&&width>0&&height>0&&s.width>0&&s.height>0;
  const connections=fresh&&state==='VALID'?markerConnections(markers,ids,{width,height},s,zoom):[];
  const rejected=new Map<string,number[]>();for(const m of markers.filter(m=>m.status!=='accepted'))rejected.set(m.reason,[...(rejected.get(m.reason)||[]),m.id]);
@@ -19,9 +19,10 @@ export default memo(function TrackingDebug({snapshot:s,now,width,height,zoom}:{s
   </svg>
   <aside className="tracking-debug-panel" aria-label="Live tracking diagnostics" aria-live="off">
    <strong>TRACKING: {state} ({validAge===null?'no reliable solution':Math.round(validAge)+' ms'}){state==='HELD'?' · PLACEMENT FROZEN':''}</strong>
-   <div>DETECTED: {expired?0:s.detected}/8 | ACCEPTED: {ids.length}/8 | IDS: {ids.length?ids.join(', '):'none'}{state==='HELD'&&s.lastValidIds?.length?' | HELD IDS: '+s.lastValidIds.join(', '):''}</div>
+   <div>DETECTED: {s.detected}/8{expired?' (last processed frame)':''} | ACCEPTED: {ids.length}/8 | IDS: {ids.length?ids.join(', '):'none'}{state==='HELD'&&s.lastValidIds?.length?' | HELD IDS: '+s.lastValidIds.join(', '):''}</div>
    <div>REJECTION: {reason||'none'}{s.check?' | FIT: '+s.check:''}</div>
    {!reason&&s.lastFailure&&<div>LAST REJECTION ({Math.max(0,Math.round(now-s.lastFailure.at))} ms): {s.lastFailure.reason}</div>}
+   <div>FRAME: #{s.frameId??'—'} {s.outcome||'WAITING'}{s.acquisition?' | CAPTURE: '+s.acquisition:''} | FAILURES: {s.consecutiveFailures??0} | DETECTOR: {s.detectorMs==null?'—':Math.round(s.detectorMs)+' ms'} | FIT: {s.fitMs==null?'—':Math.round(s.fitMs)+' ms'} | READBACK: {s.captureMs==null?'—':Math.round(s.captureMs)+' ms'} | DELIVERY/WAIT: {s.deliveryMs==null?'—':Math.round(s.deliveryMs)+' ms'}</div>
    <div>CAMERA: {s.capture} | PROCESS: {s.width} × {s.height} | ERROR: {s.error===null?'—':s.error.toFixed(2)+' px'} | FRAME AGE: {age===null?'—':Math.round(age)+' ms'}{!fresh?' · stale outlines hidden':''}</div>
    {rejected.size>0&&<div className="marker-rejection-summary">{[...rejected].map(([reason,ids])=>ids.join(', ')+': '+reason).join(' | ')}</div>}
   </aside>

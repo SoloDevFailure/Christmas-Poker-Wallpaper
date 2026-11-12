@@ -18,11 +18,19 @@ let count=8,offset=0,requests=0,last:Placement|null=null,saved:Placement[]=[],ma
 function draw(){ctx.fillStyle='#06281f';ctx.fillRect(0,0,W,H);ctx.save();ctx.translate(96+offset,54);ctx.scale(.9,.9);(selection||[0,2,5,7,1,3,4,6]).slice(0,count).forEach(i=>{const m=markers[i];ctx.fillStyle='white';ctx.fillRect(m.x-24,m.y-24,SIZE+48,SIZE+48);ctx.drawImage(images[i],m.x,m.y,SIZE,SIZE);});if(showUnknown){ctx.fillStyle='white';ctx.fillRect(W/2-78,H/2-78,156,156);ctx.drawImage(unknownImage,W/2-54,H/2-54,108,108);}ctx.restore();}
 draw();setInterval(draw,40);
 Object.defineProperty(navigator.mediaDevices,'getUserMedia',{configurable:true,value:async()=>{requests++;return canvas.captureStream(20);}});
+// Optional slow-worker delivery regression: same actual detector, delayed results
+// proportional to pixel budget, without camera cropping or mocked detections.
+if(location.search.includes('slow')){const NativeWorker=window.Worker;window.Worker=class extends NativeWorker {
+ private deliver:((e:MessageEvent)=>void)|null=null;
+ constructor(url:string|URL,options?:WorkerOptions){super(url,options);super.onmessage=e=>setTimeout(()=>this.deliver?.(e),335*(e.data.width/960)**2);}
+ override set onmessage(value:((e:MessageEvent)=>void)|null){this.deliver=value;}
+ override get onmessage(){return this.deliver;}
+} as typeof Worker;}
 function Harness(){const [p,setP]=useState<Placement>({stamp_type:'star',position_x:.5,position_y:.5,scale:160,rotation:0}),[camera,setCamera]=useState(true),[locked,setLocked]=useState(false),[stamps,setStamps]=useState<Stamp[]>([]);
  return <PhoneController placement={p} stamps={stamps} camera={camera} setCamera={value=>{manual=!value;setCamera(value);}} onChange={value=>{last=value;setP(value);}} onCameraPlacement={value=>{setLocked(!!value);if(value){last=value;setP(value);}}} onStatus={()=>{}} online busy={false} canPlace={!camera||locked} preview={()=>{}} stamp={sample=>{if(sample&&!withinTrackingGrace(sample.validUntil,performance.now()))throw Error('Expired Camera sample passed submission guard');const value=sample?.placement||p;saved.push(value);setStamps(rows=>[...rows,{...value,id:String(rows.length),session_id:'test',created_at:'',sequence:rows.length}]);}} notice="" error="" dismissError={()=>{}}/>;
 }
 if(location.search.includes('wallpaper'))createRoot(document.getElementById('root')!).render(<Wallpaper stamps={[]} previews={[]} qr=""/>);
-else{createRoot(document.getElementById('root')!).render(<Harness/>);setTimeout(()=>void check(),0);}
+else{createRoot(document.getElementById('root')!).render(<Harness/>);setTimeout(()=>void (location.search.includes('slow')?checkSlow():check()),0);}
 const wait=(ms:number)=>new Promise(r=>setTimeout(r,ms));
 async function check(){const output=document.createElement('output');output.id='qa-test-result';output.style.cssText='position:fixed;left:8px;bottom:80px;z-index:99;background:#111;color:white;font:11px monospace;padding:8px;max-width:95vw';document.body.append(output);
  const ensure=(value:unknown,message:string)=>{if(!value)throw Error(message);};
@@ -57,3 +65,12 @@ async function check(){const output=document.createElement('output');output.id='
  const manualBefore=last!.scale;pointer(mini,'pointerdown',1,r.x+r.width*.45,r.y+r.height*.5);pointer(mini,'pointerdown',2,r.x+r.width*.55,r.y+r.height*.5);pointer(mini,'pointermove',1,r.x+r.width*.4,r.y+r.height*.5);pointer(mini,'pointermove',2,r.x+r.width*.6,r.y+r.height*.5);pointer(mini,'pointerup',2,0,0);pointer(mini,'pointerup',1,0,0);await wait(80);ensure(nearly(last!.scale,Math.min(600,manualBefore*2),2),'Manual pinch failed');
  output.textContent='PASS: 1s frozen Camera/precision stamping + LOST expiry + gesture continuity + live marker connections + bottom diagnostics + all placement modes';
  }catch(e){output.textContent='FAIL: '+String(e);console.error(e);}}
+
+async function checkSlow(){for(let i=0;i<100&&!document.querySelector('button[aria-label="Options"]');i++)await wait(20);const out=document.createElement('output');out.id='qa-test-result';document.body.append(out);try{
+ (document.querySelector('button[aria-label="Options"]') as HTMLElement).click();await wait(60);const toggle=[...document.querySelectorAll('label')].find(l=>l.textContent==='Tracking Debug')?.querySelector('input');(toggle as HTMLElement).click();(document.querySelector('button[aria-label="Close options"]') as HTMLElement).click();
+ for(let i=0;i<150;i++){if(document.querySelector('.tracking-status.locked'))break;await wait(100);}
+ await wait(1500);
+ let failures=0,held=0;for(let i=0;i<40;i++){const status=document.querySelector('.tracking-debug-panel strong')?.textContent||'';if(status.includes('HELD'))held++;if(status.includes('LOST')||(document.querySelector('.phone-actions button:last-child') as HTMLButtonElement).disabled||!/DETECTED: 8/.test(document.querySelector('.tracking-debug-panel')?.textContent||''))failures++;await wait(50);}
+ const panel=document.querySelector('.tracking-debug-panel')?.textContent||'';if(failures)throw Error('Tracking expired '+failures+' times after adaptation');if(!/PROCESS: 640/.test(panel))throw Error('Slow pipeline did not reduce processing budget: '+panel);
+ out.textContent='PASS: real worker with 335ms-at-960px delivery load adapts to 640px, retains all eight detections and Stamp availability (HELD samples: '+held+'/40; no LOST)';
+ }catch(e){out.textContent='FAIL: '+e;}}

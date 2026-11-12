@@ -21,10 +21,19 @@ export function processingFrame(width:number,height:number,limit:number){const s
 export const FRAME_PAUSE=30;
 // The previous solution must remain fresh until its successor arrives. A 350ms
 // capture-age limit needs roughly TWO processing intervals, not just one.
-export function processingBudget(current:number,latency:number,needsDetail:boolean){
+export function processingBudget(current:number,latency:number,needsDetail:boolean,pause=FRAME_PAUSE){
  const budget=MAX_TRACKING_AGE-20;
- if(current>960&&2*latency+FRAME_PAUSE>budget)return current>1280?1280:960;
+ if(current>640&&2*latency+pause>budget)return current>1280?1280:current>960?960:640;
  const target=Math.min(1920,current*1.5);
- if(needsDetail&&target>current&&2*latency*(target/current)**2+FRAME_PAUSE<budget)return target;
+ if(needsDetail&&target>current&&2*latency*(target/current)**2+pause<budget)return target;
  return current;
+}
+
+// One transferred image at a time. A duplicate video frame is not a failed
+// detection and may never renew a homography timestamp.
+export class FrameGate {
+ private serial=0;private pending:number|null=null;private mediaTime:number|null=null;
+ begin(mediaTime:number){if(this.pending!==null||!Number.isFinite(mediaTime)||mediaTime===this.mediaTime)return null;this.mediaTime=mediaTime;this.pending=++this.serial;return this.pending;}
+ finish(id:number){if(id!==this.pending)return false;this.pending=null;return true;}
+ cancel(){this.pending=null;}
 }
