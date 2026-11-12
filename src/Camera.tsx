@@ -5,7 +5,7 @@ import { validPlacement, stampAsset, type Placement } from './types';
 import { stampSource } from './art';
 import TrackingDebug from './TrackingDebugger';
 import {emptyDebug,frameMarkerDecisions,type DebugSnapshot} from './trackingDebug';
-import {TrackingState,processingFrame,processingBudget,FRAME_PAUSE,FrameGate} from './trackingState';
+import {TrackingState,processingFrame,FRAME_PAUSE,FrameGate} from './trackingState';
 import { phoneFixedPlacement,screenStampFromWorld,resizePhoneStamp,smoothTracking,trackingMotion,phoneReference,type CameraHandle,type ScreenStamp } from './cameraPlacement';
 type Pose = {
     h: number[];
@@ -150,7 +150,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                     return;
                 worker = new Worker(new URL('./tracker.worker.ts', import.meta.url), { type: 'module' });
                 const frameCallbacks=typeof v.requestVideoFrameCallback==='function';
-                let processingSize=1280,lastResolutionChange=0,pendingPose:Pose|null=null;
+                let pendingPose:Pose|null=null;
                 const schedule=()=>{timer=setTimeout(()=>{if(stopped)return;if(frameCallbacks)videoCallback=v.requestVideoFrameCallback((_,meta)=>frame(meta));else frame();},frameCallbacks?0:FRAME_PAUSE);};
                 const frame = (meta?:VideoFrameCallbackMetadata) => {
                     if (stopped)
@@ -168,13 +168,15 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                     // when available. Worker timings are durations, never cross-context clocks.
                     const captureStarted=performance.now(),at=meta?Math.min(captureStarted,meta.presentationTime):captureStarted;
                     try{
-                        const dimensions=processingFrame(v.videoWidth,v.videoHeight,processingSize);
+                        const dimensions=processingFrame(v.videoWidth,v.videoHeight);
                         if(canvas.width!==dimensions.width||canvas.height!==dimensions.height){canvas.width=dimensions.width;canvas.height=dimensions.height;}
+                        const resizedAt=performance.now(),resizeMs=resizedAt-captureStarted;
                         // Five-argument drawImage resizes the ENTIRE source, never the CSS 2× crop.
                         ctx.drawImage(v,0,0,canvas.width,canvas.height);
+                        const drawnAt=performance.now(),drawMs=drawnAt-resizedAt;
                         const data=ctx.getImageData(0,0,canvas.width,canvas.height);
-                        const captureMs=performance.now()-captureStarted;
-                        worker!.postMessage({buffer:data.data.buffer,width:canvas.width,height:canvas.height,at,epoch:epoch.current,id,captureMs,captureWidth:v.videoWidth,captureHeight:v.videoHeight,trackingDebug:latest.current.trackingDebug,aim:latest.current.mode==='legacy'?{x:canvas.width*(.5+latest.current.calibration.x),y:canvas.height*(.5+latest.current.calibration.y)}:undefined},[data.data.buffer]);
+                        const readAt=performance.now(),pixelsMs=readAt-drawnAt,captureMs=readAt-captureStarted;
+                        worker!.postMessage({buffer:data.data.buffer,width:canvas.width,height:canvas.height,at,epoch:epoch.current,id,captureMs,resizeMs,drawMs,pixelsMs,captureWidth:v.videoWidth,captureHeight:v.videoHeight,trackingDebug:latest.current.trackingDebug,aim:latest.current.mode==='legacy'?{x:canvas.width*(.5+latest.current.calibration.x),y:canvas.height*(.5+latest.current.calibration.y)}:undefined},[data.data.buffer]);
                         lastFrame={...lastFrame,acquisition:'processing frame '+id};if(latest.current.trackingDebug)debugSnapshot.current={...debugSnapshot.current,acquisition:'processing frame '+id};
                     }catch(e){gate.cancel();lastFrame={...lastFrame,acquisition:'unavailable: pixel readback'};invalidate(e instanceof Error?e.message:'Camera readback failed','capture-failure');schedule();}
                 };
@@ -190,11 +192,8 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                     }) => f.id === m.id)).length;
                     const tagEdges=found.filter((f:{id:number;corners:Point[]})=>markers.some(m=>m.id===f.id)&&f.corners?.length===4).flatMap((f:{corners:Point[]})=>f.corners.map((p:Point,i:number)=>Math.hypot(p.x-f.corners[(i+1)%4].x,p.y-f.corners[(i+1)%4].y)));
                     const smallestTag=tagEdges.length?Math.min(...tagEdges):0;
-                    const needDetail=detected<3||smallestTag>0&&smallestTag<24;
-                    const nextBudget=processingBudget(processingSize,now-data.at,needDetail,(frameCallbacks?0:FRAME_PAUSE)+1000/(stream?.getVideoTracks()[0]?.getSettings().frameRate||30));
-                    if(nextBudget!==processingSize&&(nextBudget<processingSize||now-lastResolutionChange>2000)){lastResolutionChange=now+(nextBudget<processingSize?8000:0);processingSize=nextBudget;}
-                    lastFrame={smallestTagPixels:Math.round(smallestTag),resolution:data.captureWidth+' × '+data.captureHeight,processingResolution:data.width+' × '+data.height,frameId:data.id,frameOutcome:data.error?'detector failure':'processed',acquisition:'awaiting next frame',captureMs:data.captureMs,detectorMs:data.detectorMs,fitMs:data.fitMs,workerMs:data.workerMs,deliveryMs:Math.max(0,now-data.at-(data.workerMs||0)-(data.captureMs||0)),processingMs:Math.round(now-data.at),fps:Math.round(fps),detected:found.length,matched:detected,usable:data.usable||0,inliers:data.fit?.count||0,accepted:0,reprojectionError:data.fit?.error??null,tolerance:data.fit?.tolerance??null,confidence:data.fit?.confidence??null};
-                    if(latest.current.trackingDebug){debugSnapshot.current={...debugSnapshot.current,markers:data.trace?.markers||[],detected:found.length,acceptedIds:[],error:data.fit?.error??null,check:data.trace?.check||'',width:data.width||0,height:data.height||0,capture:data.captureWidth+' × '+data.captureHeight,frameId:data.id,outcome:data.error?'DETECTOR FAILURE':'PROCESSED',detectorMs:data.detectorMs??null,fitMs:data.fitMs??null,workerMs:data.workerMs??null,captureMs:data.captureMs??null,deliveryMs:Math.max(0,now-data.at-(data.workerMs||0)-(data.captureMs||0)),consecutiveFailures,at:data.at??null,draw:data.epoch===epoch.current&&Math.abs(data.width/data.height-v.videoWidth/v.videoHeight)<.01};}
+                    lastFrame={smallestTagPixels:Math.round(smallestTag),resolution:data.captureWidth+' × '+data.captureHeight,processingResolution:data.width+' × '+data.height,frameId:data.id,frameOutcome:data.error?'detector failure':'processed',acquisition:'awaiting next frame',captureMs:data.captureMs,resizeMs:data.resizeMs,drawMs:data.drawMs,pixelsMs:data.pixelsMs,detectorMs:data.detectorMs,fitMs:data.fitMs,workerMs:data.workerMs,deliveryMs:Math.max(0,now-data.at-(data.workerMs||0)-(data.captureMs||0)),processingMs:Math.round(now-data.at),fps:Math.round(fps),detected:found.length,matched:detected,usable:data.usable||0,inliers:data.fit?.count||0,accepted:0,reprojectionError:data.fit?.error??null,tolerance:data.fit?.tolerance??null,confidence:data.fit?.confidence??null};
+                    if(latest.current.trackingDebug){debugSnapshot.current={...debugSnapshot.current,markers:data.trace?.markers||[],detected:found.length,acceptedIds:[],error:data.fit?.error??null,check:data.trace?.check||'',width:data.width||0,height:data.height||0,capture:data.captureWidth+' × '+data.captureHeight,frameId:data.id,outcome:data.error?'DETECTOR FAILURE':'PROCESSED',detectorMs:data.detectorMs??null,fitMs:data.fitMs??null,workerMs:data.workerMs??null,captureMs:data.captureMs??null,resizeMs:data.resizeMs??null,drawMs:data.drawMs??null,pixelsMs:data.pixelsMs??null,deliveryMs:Math.max(0,now-data.at-(data.workerMs||0)-(data.captureMs||0)),consecutiveFailures,at:data.at??null,draw:data.epoch===epoch.current&&Math.abs(data.width/data.height-v.videoWidth/v.videoHeight)<.01};}
                     let rejectReason='poor-homography';
                     try {
                         if(data.error){rejectReason='detector-failure';throw Error(data.error);}

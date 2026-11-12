@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {fitMarkers,TrackingError,markers,markerCorners,project,invertHomography,type Detection} from '../src/geometry.ts';
-import {TrackingState,RECOVERY_HOLD,processingFrame,processingBudget,FRAME_PAUSE} from '../src/trackingState.ts';
+import {TrackingState,RECOVERY_HOLD,processingFrame} from '../src/trackingState.ts';
 import {trackingMotion} from '../src/cameraPlacement.ts';
 const h=[.52,.02,75,.01,.55,40,.0001,.00004];
 const make=(ids:number[],transform=h,noise=0):Detection[]=>ids.map(i=>({id:markers[i].id,corners:markerCorners(markers[i]).map((p,j)=>{const q=project(transform,p);return {x:q.x+noise*Math.sin(i*7+j),y:q.y+noise*Math.cos(i*3-j)};})}));
@@ -52,7 +52,3 @@ test('genuine dropout, stale frames and orientation resets disable stamping',()=
 });
 
 test('portrait detector frames have the same pixel budget as landscape and remain uncropped',()=>{assert.deepEqual(processingFrame(3840,2160,1280),{width:1280,height:720});assert.deepEqual(processingFrame(2160,3840,1280),{width:720,height:1280});assert.deepEqual(processingFrame(2160,3840,1920),{width:1080,height:1920});assert.deepEqual(processingFrame(640,480,1280),{width:640,height:480});});
-
-test('adaptive budget accounts for capture age across TWO processing intervals',()=>{assert.equal(processingBudget(1280,200,false),960);assert.equal(processingBudget(1920,220,false),1280);assert.equal(processingBudget(1280,100,true),1280);assert.equal(processingBudget(1280,50,true),1920);assert.equal(processingBudget(1280,50,false),1280);assert.equal(processingBudget(960,210,true),640);
- const state=new TrackingState(),latency=200;state.accept(0,latency);assert.equal(state.read(2*latency+FRAME_PAUSE-1).phase,'holding');const faster=latency*(960/1280)**2;state.accept(1000,1000+faster);assert.equal(state.read(1000+2*faster+FRAME_PAUSE-1).stampable,true);
-});

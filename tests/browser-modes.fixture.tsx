@@ -68,9 +68,12 @@ async function check(){const output=document.createElement('output');output.id='
 
 async function checkSlow(){for(let i=0;i<100&&!document.querySelector('button[aria-label="Options"]');i++)await wait(20);const out=document.createElement('output');out.id='qa-test-result';document.body.append(out);try{
  (document.querySelector('button[aria-label="Options"]') as HTMLElement).click();await wait(60);const toggle=[...document.querySelectorAll('label')].find(l=>l.textContent==='Tracking Debug')?.querySelector('input');(toggle as HTMLElement).click();(document.querySelector('button[aria-label="Close options"]') as HTMLElement).click();
- for(let i=0;i<150;i++){if(document.querySelector('.tracking-status.locked'))break;await wait(100);}
- await wait(1500);
- let failures=0,held=0;for(let i=0;i<40;i++){const status=document.querySelector('.tracking-debug-panel strong')?.textContent||'';if(status.includes('HELD'))held++;if(status.includes('LOST')||(document.querySelector('.phone-actions button:last-child') as HTMLButtonElement).disabled||!/DETECTED: 8/.test(document.querySelector('.tracking-debug-panel')?.textContent||''))failures++;await wait(50);}
- const panel=document.querySelector('.tracking-debug-panel')?.textContent||'';if(failures)throw Error('Tracking expired '+failures+' times after adaptation');if(!/PROCESS: 640/.test(panel))throw Error('Slow pipeline did not reduce processing budget: '+panel);
- out.textContent='PASS: real worker with 335ms-at-960px delivery load adapts to 640px, retains all eight detections and Stamp availability (HELD samples: '+held+'/40; no LOST)';
+ await wait(2500);
+ for(let i=0;i<20;i++){
+  const panel=document.querySelector('.tracking-debug-panel')?.textContent||'';
+  if(!/PROCESS: 1280 × 720/.test(panel))throw Error('Slow frames changed detection detail: '+panel);
+  if(!(document.querySelector('.phone-actions button:last-child') as HTMLButtonElement).disabled)throw Error('Over-age worker delivery enabled stamping');
+  await wait(50);
+ }
+ out.textContent='PASS: slow delivery retains fixed 1280px processing; over-age results cannot authorise stamping';
  }catch(e){out.textContent='FAIL: '+e;}}

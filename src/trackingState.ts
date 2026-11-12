@@ -15,20 +15,13 @@ export class TrackingState {
  read(now:number):{phase:TrackingPhase;stampable:boolean}{const usable=this.received!==null&&now>=this.received&&withinTrackingGrace(this.validUntil,now);const fresh=usable&&this.accepted&&this.captured!==null&&now-this.captured<=MAX_TRACKING_AGE;return {phase:fresh?'locked':usable?'holding':'lost',stampable:usable};}
 }
 
-// Bound total detector work equally in portrait and landscape, without cropping.
-export function processingFrame(width:number,height:number,limit:number){const scale=Math.min(1,limit/Math.max(width,height));return {width:Math.round(width*scale),height:Math.round(height*scale)};}
+// Preserve the demonstrated 720×1280 portrait / 1280×720 landscape detail.
+// Latency must not silently change marker sampling resolution.
+export const DETECTION_LONG_EDGE=1280;
+// Resize the entire frame; smaller camera sources are never upscaled.
+export function processingFrame(width:number,height:number,limit=DETECTION_LONG_EDGE){const scale=Math.min(1,limit/Math.max(width,height));return {width:Math.round(width*scale),height:Math.round(height*scale)};}
 
 export const FRAME_PAUSE=30;
-// The previous solution must remain fresh until its successor arrives. A 350ms
-// capture-age limit needs roughly TWO processing intervals, not just one.
-export function processingBudget(current:number,latency:number,needsDetail:boolean,pause=FRAME_PAUSE){
- const budget=MAX_TRACKING_AGE-20;
- if(current>640&&2*latency+pause>budget)return current>1280?1280:current>960?960:640;
- const target=Math.min(1920,current*1.5);
- if(needsDetail&&target>current&&2*latency*(target/current)**2+pause<budget)return target;
- return current;
-}
-
 // One transferred image at a time. A duplicate video frame is not a failed
 // detection and may never renew a homography timestamp.
 export class FrameGate {

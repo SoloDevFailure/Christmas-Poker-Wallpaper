@@ -84,3 +84,10 @@ test('adaptive resize truncates js-aruco grayscale/threshold tails and contour s
 test('invalid pixel acquisition is a detector failure, never a zero-marker result',()=>{
  const engine=new TrackerEngine();assert.throws(()=>engine.process({width:640,height:360,data:new Uint8ClampedArray(0)} as ImageData),/Invalid camera RGBA frame/);
 });
+
+test('halving portrait processing resolution can destroy visible small-marker detail',()=>{
+ const width=720,height=1280,data=new Uint8ClampedArray(width*height*4);for(let i=0;i<data.length;i+=4){data[i]=data[i+1]=data[i+2]=25;data[i+3]=255;}
+ const small=resized(board(),640),left=40,top=550;for(let y=0;y<small.height;y++)for(let x=0;x<small.width;x++)data.set(small.data.subarray((y*small.width+x)*4,(y*small.width+x)*4+4),((y+top)*width+x+left)*4);
+ const full={width,height,data,colorSpace:'srgb'} as ImageData,engine=new TrackerEngine(),restored=engine.process(full),degraded=engine.process(resized(full,640));
+ assert.ok(restored.found.length>=3,'1280px portrait frame must retain sufficient small tags');assert.ok(restored.fit,'Retained corners must produce a valid homography');assert.ok(degraded.found.length<3,'Half-sized image loses usable small-marker detail');
+});
