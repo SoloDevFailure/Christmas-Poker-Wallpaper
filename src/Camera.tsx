@@ -31,6 +31,7 @@ type Props = {
     mode: 'camera-stamp'|'legacy';
     onPrecisionChange:(holding:boolean)=>void;
     disabled: boolean;
+    processingPaused?:boolean;
 };
 export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
     const sticker=useRef<HTMLImageElement>(null),paintFrame=useRef<number|null>(null),visual=useRef({width:0,height:0,reference:0});
@@ -67,6 +68,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
         return lastReliable.current;
     }
     function sample(){
+        if(latest.current.processingPaused)return null;
         const p=poseRef.current,frozen=frozenPlacement(),state=tracking.read(performance.now());
         if(!p||!frozen||!state.stampable)return null;
         let placement={...frozen};
@@ -181,6 +183,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                 const frame = async (meta?:VideoFrameCallbackMetadata) => {
                     if (stopped)
                         return;
+                    if(latest.current.processingPaused){timer=setTimeout(frame,120);return;}
                     if (document.visibilityState !== 'visible' || v.readyState < 2) {
                         lastFrame={...lastFrame,acquisition:'unavailable: camera not ready or hidden'};
                         invalidate('Waiting for camera frame','camera-not-ready',document.visibilityState!=='visible');
@@ -204,7 +207,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                         const dimensions=processingFrame(captureWidth,captureHeight);
                         if(workerCapture){
                             const bitmap=await createImageBitmap(v).catch(error=>{workerCapture=false;throw error;});
-                            if(stopped){bitmap.close();return;}
+                            if(stopped||latest.current.processingPaused){bitmap.close();gate.cancel();if(!stopped)schedule();return;}
                             if(bitmap.width!==captureWidth||bitmap.height!==captureHeight){bitmap.close();throw Error('Camera orientation changed during capture');}
                             const bitmapMs=performance.now()-captureStarted;
                             try{worker!.postMessage({bitmap,...dimensions,at,epoch:frameEpoch,id,captureMs:bitmapMs,bitmapMs,resizeMs:0,drawMs:0,pixelsMs:0,captureWidth,captureHeight,capturePath:'worker canvas',trackingDebug:latest.current.trackingDebug,aim:latest.current.mode==='legacy'?{x:dimensions.width*(.5+latest.current.calibration.x),y:dimensions.height*(.5+latest.current.calibration.y)}:undefined},[bitmap]);}catch(error){bitmap.close();workerCapture=false;throw error;}
@@ -228,6 +231,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                     if(data.type==='ready'){workerCapture=!!data.bitmapCapture&&typeof createImageBitmap==='function';schedule();return;}
                     if(data.captureFallback)workerCapture=false;
                     if(!gate.finish(data.id))return; // Ignore unsolicited/late replies; never queue concurrent detection.
+                    if(latest.current.processingPaused){schedule();return;}
                     const now = performance.now(), fps = 1000 / (now - last);
                     last = now;
                     const found = data.found || [], detected = markers.filter(m => found.some((f: {
