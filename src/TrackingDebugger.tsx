@@ -23,7 +23,7 @@ export default memo(function TrackingDebug({snapshot:s,now,width,height,zoom}:{s
    <div>REJECTION: {reason||'none'}{s.check?' | FIT: '+s.check:''}</div>
    {!reason&&s.lastFailure&&<div>LAST REJECTION ({Math.max(0,Math.round(now-s.lastFailure.at))} ms): {s.lastFailure.reason}</div>}
    <div>FRAME: #{s.frameId??'—'} {s.outcome||'WAITING'}{s.acquisition?' | CAPTURE: '+s.acquisition:''} | FAILURES: {s.consecutiveFailures??0} | DETECTOR: {s.detectorMs==null?'—':Math.round(s.detectorMs)+' ms'} | FIT: {s.fitMs==null?'—':Math.round(s.fitMs)+' ms'} | CAPTURE TOTAL: {s.captureMs==null?'—':Math.round(s.captureMs)+' ms'} | DELIVERY/WAIT: {s.deliveryMs==null?'—':Math.round(s.deliveryMs)+' ms'}</div>
-   <div>RESIZE: {s.resizeMs==null?'—':Math.round(s.resizeMs)+' ms'} | DRAW/SCALE: {s.drawMs==null?'—':Math.round(s.drawMs)+' ms'} | PIXEL READ: {s.pixelsMs==null?'—':Math.round(s.pixelsMs)+' ms'}</div>
+   <div>{s.capturePath||'capture'}{s.bitmapMs==null?'':' | BITMAP: '+Math.round(s.bitmapMs)+' ms'} | RESIZE: {s.resizeMs==null?'—':Math.round(s.resizeMs)+' ms'} | DRAW/SCALE: {s.drawMs==null?'—':Math.round(s.drawMs)+' ms'} | PIXEL READ: {s.pixelsMs==null?'—':Math.round(s.pixelsMs)+' ms'}</div>
    <div>CAMERA: {s.capture} | PROCESS: {s.width} × {s.height} | ERROR: {s.error===null?'—':s.error.toFixed(2)+' px'} | FRAME AGE: {age===null?'—':Math.round(age)+' ms'}{!fresh?' · stale outlines hidden':''}</div>
    {rejected.size>0&&<div className="marker-rejection-summary">{[...rejected].map(([reason,ids])=>ids.join(', ')+': '+reason).join(' | ')}</div>}
   </aside>

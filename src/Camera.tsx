@@ -1,8 +1,9 @@
-import { forwardRef, useImperativeHandle, useEffect, useRef, useState, type PointerEvent } from 'react';
+import { forwardRef, useImperativeHandle, useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from 'react';
 import { markerCorners, homography, markers, project, W, H, type Point } from './geometry';
 import { MAX_TRACKING_AGE, videoViewport, viewToImage, imageToView, onVideo, manipulate, stickerCorners, type Gesture } from './manipulation';
 import { validPlacement, stampAsset, type Placement } from './types';
 import { stampSource } from './art';
+import {screenArtworkStyle} from './screenArtwork';
 import {PhoneGesture} from './phoneGesture';
 import TrackingDebug from './TrackingDebugger';
 import {emptyDebug,frameMarkerDecisions,type DebugSnapshot} from './trackingDebug';
@@ -32,6 +33,7 @@ type Props = {
     disabled: boolean;
 };
 export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
+    const sticker=useRef<HTMLImageElement>(null),paintFrame=useRef<number|null>(null),visual=useRef({width:0,height:0,reference:0});
     const video = useRef<HTMLVideoElement>(null), view = useRef<HTMLDivElement>(null), latest = useRef(props);
     latest.current = props;
     const tracking=useRef(new TrackingState()).current,lastReliable=useRef<Placement|null>(null),needsRebase=useRef(false);
@@ -46,6 +48,17 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
     const zoomRef=useRef<1|2>(2);
     const phoneControls=useRef({size:.56,rotation:0}),phoneGesture=useRef<{base:{size:number;rotation:number};points:Point[]}|null>(null),precision=useRef<ScreenStamp|null>(null);
     const centredGesture=useRef(new PhoneGesture()).current;
+    function paintArtwork(){
+        if(latest.current.mode!=='camera-stamp'||paintFrame.current!==null)return;
+        paintFrame.current=requestAnimationFrame(()=>{paintFrame.current=null;const image=sticker.current;if(image&&latest.current.mode==='camera-stamp')Object.assign(image.style,screenArtworkStyle(latest.current.placement,phoneControls.current,visual.current.reference));});
+    }
+    function artworkLayout(){
+        const box=view.current?.getBoundingClientRect();if(!box)return;
+        const v=videoViewport(box.width,box.height,video.current?.videoWidth||W,video.current?.videoHeight||H,'contain',zoomRef.current);
+        visual.current={width:box.width,height:box.height,reference:phoneReference(v,zoomRef.current)};paintArtwork();
+    }
+    useLayoutEffect(()=>{artworkLayout();},[size.width,size.height,props.mode,displayZoom,props.placement.stamp_type,props.placement.image_data,props.placement.image_width,props.placement.image_height]);
+    useEffect(()=>()=>{if(paintFrame.current!==null)cancelAnimationFrame(paintFrame.current);},[]);
     function cancelPrecision(){precision.current=null;latest.current.onPrecisionChange(false);}
     function frozenPlacement(){
         const p=lastReliable.current;if(!p)return null;
@@ -53,11 +66,22 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
         if(!Object.entries(asset).every(([key,value])=>p[key as keyof Placement]===value))lastReliable.current={...p,...asset};
         return lastReliable.current;
     }
-    function sample(){const p=poseRef.current,frozen=frozenPlacement();return p&&frozen&&tracking.read(performance.now()).stampable&&validPlacement(frozen)?{placement:{...frozen},at:p.at,validUntil:tracking.validUntil}:null;}
+    function sample(){
+        const p=poseRef.current,frozen=frozenPlacement(),state=tracking.read(performance.now());
+        if(!p||!frozen||!state.stampable)return null;
+        let placement={...frozen};
+        if(latest.current.mode==='camera-stamp'){
+            const intended=updatePhone(p);
+            // HELD freezes physical aim. User-controlled size/rotation may change,
+            // using that same reliable pose, without extending its deadline.
+            placement=state.phase==='locked'?intended:{...intended,position_x:frozen.position_x,position_y:frozen.position_y};
+        }
+        return validPlacement(placement)?{placement,at:p.at,validUntil:tracking.validUntil}:null;
+    }
     useImperativeHandle(ref,()=>({sample,beginPrecision(){const p=poseRef.current;if(latest.current.mode!=='legacy'||!p||!sample())return false;precision.current=screenStampFromWorld(artwork.current,p.inverse,viewport(p));pointers.current.clear();gesture.current=null;latest.current.onPrecisionChange(true);return true;},endPrecision(){const result=precision.current?sample():null;cancelPrecision();return result;},cancelPrecision}));
     function phoneScreen(p:Pose):ScreenStamp {const v=viewport(p);return {centre:{x:v.width/2,y:v.height/2},size:phoneControls.current.size*phoneReference(v,zoomRef.current),rotation:phoneControls.current.rotation};}
-    function updatePhone(p:Pose){return phoneFixedPlacement(artwork.current,p.h,viewport(p),precision.current||phoneScreen(p));}
-    useEffect(()=>{centredGesture.clear();cancelPrecision();pointers.current.clear();gesture.current=null;phoneGesture.current=null;anchored.current=true;const p=poseRef.current;if(p&&props.mode==='camera-stamp'){const s=screenStampFromWorld(artwork.current,p.inverse,viewport(p)),v=viewport(p);phoneControls.current={size:Math.max(.06,Math.min(.85,s.size/phoneReference(v,zoomRef.current))),rotation:s.rotation};}},[props.mode]);
+    function updatePhone(p:Pose){return phoneFixedPlacement(artwork.current,p.h,viewport(p),precision.current||phoneScreen(p),latest.current.mode!=='camera-stamp');}
+    useEffect(()=>{centredGesture.clear();cancelPrecision();pointers.current.clear();gesture.current=null;phoneGesture.current=null;anchored.current=true;const p=poseRef.current;if(p&&props.mode==='camera-stamp'){const s=screenStampFromWorld(artwork.current,p.inverse,viewport(p)),v=viewport(p);phoneControls.current={size:Math.max(.06,Math.min(.85,s.size/phoneReference(v,zoomRef.current))),rotation:s.rotation};}paintArtwork();},[props.mode]);
     useEffect(()=>{if(props.disabled){centredGesture.clear();cancelPrecision();pointers.current.clear();gesture.current=null;}},[props.disabled]);
     const previousReset = useRef(props.aimReset);
     useEffect(() => {
@@ -152,9 +176,9 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                     return;
                 worker = new Worker(new URL('./tracker.worker.ts', import.meta.url), { type: 'module' });
                 const frameCallbacks=typeof v.requestVideoFrameCallback==='function';
-                let pendingPose:Pose|null=null;
+                let pendingPose:Pose|null=null,workerCapture=false;
                 const schedule=()=>{timer=setTimeout(()=>{if(stopped)return;if(frameCallbacks)videoCallback=v.requestVideoFrameCallback((_,meta)=>frame(meta));else frame();},frameCallbacks?0:FRAME_PAUSE);};
-                const frame = (meta?:VideoFrameCallbackMetadata) => {
+                const frame = async (meta?:VideoFrameCallbackMetadata) => {
                     if (stopped)
                         return;
                     if (document.visibilityState !== 'visible' || v.readyState < 2) {
@@ -164,13 +188,27 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                         return;
                     }
                     if(!v.videoWidth||!v.videoHeight){lastFrame={...lastFrame,acquisition:'unavailable: camera dimensions'};schedule();return;}
+                    // Legacy browsers cannot move canvas readback into a worker.
+                    // Yield that blocking fallback while fingers are manipulating artwork.
+                    if(!workerCapture&&latest.current.mode==='camera-stamp'&&centredGesture.active){
+                        if(latest.current.trackingDebug)debugSnapshot.current={...debugSnapshot.current,acquisition:'deferred: touch interaction (main-thread fallback)'};
+                        timer=setTimeout(frame,FRAME_PAUSE);return;
+                    }
                     const id=gate.begin(meta?.mediaTime??v.currentTime);
                     if(id===null){lastFrame={...lastFrame,acquisition:'skipped: duplicate or busy'};diagnostics();schedule();return;}
                     // Timestamp before pixel readback, using the presented-frame clock
                     // when available. Worker timings are durations, never cross-context clocks.
                     const captureStarted=performance.now(),at=meta?Math.min(captureStarted,meta.presentationTime):captureStarted;
+                    const frameEpoch=epoch.current,captureWidth=v.videoWidth,captureHeight=v.videoHeight;
                     try{
-                        const dimensions=processingFrame(v.videoWidth,v.videoHeight);
+                        const dimensions=processingFrame(captureWidth,captureHeight);
+                        if(workerCapture){
+                            const bitmap=await createImageBitmap(v).catch(error=>{workerCapture=false;throw error;});
+                            if(stopped){bitmap.close();return;}
+                            if(bitmap.width!==captureWidth||bitmap.height!==captureHeight){bitmap.close();throw Error('Camera orientation changed during capture');}
+                            const bitmapMs=performance.now()-captureStarted;
+                            try{worker!.postMessage({bitmap,...dimensions,at,epoch:frameEpoch,id,captureMs:bitmapMs,bitmapMs,resizeMs:0,drawMs:0,pixelsMs:0,captureWidth,captureHeight,capturePath:'worker canvas',trackingDebug:latest.current.trackingDebug,aim:latest.current.mode==='legacy'?{x:dimensions.width*(.5+latest.current.calibration.x),y:dimensions.height*(.5+latest.current.calibration.y)}:undefined},[bitmap]);}catch(error){bitmap.close();workerCapture=false;throw error;}
+                        }else{
                         if(canvas.width!==dimensions.width||canvas.height!==dimensions.height){canvas.width=dimensions.width;canvas.height=dimensions.height;}
                         const resizedAt=performance.now(),resizeMs=resizedAt-captureStarted;
                         // Five-argument drawImage resizes the ENTIRE source, never the CSS 2× crop.
@@ -178,7 +216,8 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                         const drawnAt=performance.now(),drawMs=drawnAt-resizedAt;
                         const data=ctx.getImageData(0,0,canvas.width,canvas.height);
                         const readAt=performance.now(),pixelsMs=readAt-drawnAt,captureMs=readAt-captureStarted;
-                        worker!.postMessage({buffer:data.data.buffer,width:canvas.width,height:canvas.height,at,epoch:epoch.current,id,captureMs,resizeMs,drawMs,pixelsMs,captureWidth:v.videoWidth,captureHeight:v.videoHeight,trackingDebug:latest.current.trackingDebug,aim:latest.current.mode==='legacy'?{x:canvas.width*(.5+latest.current.calibration.x),y:canvas.height*(.5+latest.current.calibration.y)}:undefined},[data.data.buffer]);
+                        worker!.postMessage({buffer:data.data.buffer,width:canvas.width,height:canvas.height,at,epoch:frameEpoch,id,captureMs,resizeMs,drawMs,pixelsMs,captureWidth,captureHeight,capturePath:'main-thread fallback',trackingDebug:latest.current.trackingDebug,aim:latest.current.mode==='legacy'?{x:canvas.width*(.5+latest.current.calibration.x),y:canvas.height*(.5+latest.current.calibration.y)}:undefined},[data.data.buffer]);
+                        }
                         lastFrame={...lastFrame,acquisition:'processing frame '+id};if(latest.current.trackingDebug)debugSnapshot.current={...debugSnapshot.current,acquisition:'processing frame '+id};
                     }catch(e){gate.cancel();lastFrame={...lastFrame,acquisition:'unavailable: pixel readback'};invalidate(e instanceof Error?e.message:'Camera readback failed','capture-failure');schedule();}
                 };
@@ -186,6 +225,8 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                 worker.onmessage = ({ data }) => {
                     if (stopped)
                         return;
+                    if(data.type==='ready'){workerCapture=!!data.bitmapCapture&&typeof createImageBitmap==='function';schedule();return;}
+                    if(data.captureFallback)workerCapture=false;
                     if(!gate.finish(data.id))return; // Ignore unsolicited/late replies; never queue concurrent detection.
                     const now = performance.now(), fps = 1000 / (now - last);
                     last = now;
@@ -194,11 +235,11 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                     }) => f.id === m.id)).length;
                     const tagEdges=found.filter((f:{id:number;corners:Point[]})=>markers.some(m=>m.id===f.id)&&f.corners?.length===4).flatMap((f:{corners:Point[]})=>f.corners.map((p:Point,i:number)=>Math.hypot(p.x-f.corners[(i+1)%4].x,p.y-f.corners[(i+1)%4].y)));
                     const smallestTag=tagEdges.length?Math.min(...tagEdges):0;
-                    lastFrame={smallestTagPixels:Math.round(smallestTag),resolution:data.captureWidth+' × '+data.captureHeight,processingResolution:data.width+' × '+data.height,frameId:data.id,frameOutcome:data.error?'detector failure':'processed',acquisition:'awaiting next frame',captureMs:data.captureMs,resizeMs:data.resizeMs,drawMs:data.drawMs,pixelsMs:data.pixelsMs,detectorMs:data.detectorMs,fitMs:data.fitMs,workerMs:data.workerMs,deliveryMs:Math.max(0,now-data.at-(data.workerMs||0)-(data.captureMs||0)),processingMs:Math.round(now-data.at),fps:Math.round(fps),detected:found.length,matched:detected,usable:data.usable||0,inliers:data.fit?.count||0,accepted:0,reprojectionError:data.fit?.error??null,tolerance:data.fit?.tolerance??null,confidence:data.fit?.confidence??null};
-                    if(latest.current.trackingDebug){debugSnapshot.current={...debugSnapshot.current,markers:data.trace?.markers||[],detected:found.length,acceptedIds:[],error:data.fit?.error??null,check:data.trace?.check||'',width:data.width||0,height:data.height||0,capture:data.captureWidth+' × '+data.captureHeight,frameId:data.id,outcome:data.error?'DETECTOR FAILURE':'PROCESSED',detectorMs:data.detectorMs??null,fitMs:data.fitMs??null,workerMs:data.workerMs??null,captureMs:data.captureMs??null,resizeMs:data.resizeMs??null,drawMs:data.drawMs??null,pixelsMs:data.pixelsMs??null,deliveryMs:Math.max(0,now-data.at-(data.workerMs||0)-(data.captureMs||0)),consecutiveFailures,at:data.at??null,draw:data.epoch===epoch.current&&Math.abs(data.width/data.height-v.videoWidth/v.videoHeight)<.01};}
+                    lastFrame={smallestTagPixels:Math.round(smallestTag),resolution:data.captureWidth+' × '+data.captureHeight,processingResolution:data.width+' × '+data.height,frameId:data.id,frameOutcome:data.error?(data.reason==='capture-failure'?'capture failure':'detector failure'):'processed',acquisition:'awaiting next frame',captureMs:data.captureMs,capturePath:data.capturePath,bitmapMs:data.bitmapMs,resizeMs:data.resizeMs,drawMs:data.drawMs,pixelsMs:data.pixelsMs,detectorMs:data.detectorMs,fitMs:data.fitMs,workerMs:data.workerMs,deliveryMs:Math.max(0,now-data.at-(data.workerMs||0)-(data.captureMs||0)),processingMs:Math.round(now-data.at),fps:Math.round(fps),detected:found.length,matched:detected,usable:data.usable||0,inliers:data.fit?.count||0,accepted:0,reprojectionError:data.fit?.error??null,tolerance:data.fit?.tolerance??null,confidence:data.fit?.confidence??null};
+                    if(latest.current.trackingDebug){debugSnapshot.current={...debugSnapshot.current,markers:data.trace?.markers||[],detected:found.length,acceptedIds:[],error:data.fit?.error??null,check:data.trace?.check||'',width:data.width||0,height:data.height||0,capture:data.captureWidth+' × '+data.captureHeight,frameId:data.id,outcome:data.error?(data.reason==='capture-failure'?'CAPTURE FAILURE':'DETECTOR FAILURE'):'PROCESSED',detectorMs:data.detectorMs??null,fitMs:data.fitMs??null,workerMs:data.workerMs??null,captureMs:data.captureMs??null,capturePath:data.capturePath,bitmapMs:data.bitmapMs??null,resizeMs:data.resizeMs??null,drawMs:data.drawMs??null,pixelsMs:data.pixelsMs??null,deliveryMs:Math.max(0,now-data.at-(data.workerMs||0)-(data.captureMs||0)),consecutiveFailures,at:data.at??null,draw:data.epoch===epoch.current&&Math.abs(data.width/data.height-v.videoWidth/v.videoHeight)<.01};}
                     let rejectReason='poor-homography';
                     try {
-                        if(data.error){rejectReason='detector-failure';throw Error(data.error);}
+                        if(data.error){rejectReason=data.reason||'detector-failure';throw Error(data.error);}
                         if(data.epoch!==epoch.current||Math.abs(data.width/data.height-v.videoWidth/v.videoHeight)>.01||document.visibilityState!=='visible'){rejectReason='view-changed';throw Error('Waiting for the current camera view');}
                         if(now-data.at>MAX_TRACKING_AGE){rejectReason='stale-frame';throw Error('Camera processing is too slow');}
                         if(!data.fit){rejectReason=data.reason||'poor-homography';throw Error(data.rejection||'Show at least 3 markers');}
@@ -224,8 +265,8 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                         reportedPhase='locked';diagnostics();
                     }catch(e){
                         consecutiveFailures++;
-                        lastFrame.frameOutcome=data.error?'detector failure':'rejected: '+rejectReason;
-                        if(latest.current.trackingDebug)debugSnapshot.current={...debugSnapshot.current,outcome:data.error?'DETECTOR FAILURE':'REJECTED: '+rejectReason};
+                        lastFrame.frameOutcome=data.error?(data.reason==='capture-failure'?'capture failure':'detector failure'):'rejected: '+rejectReason;
+                        if(latest.current.trackingDebug)debugSnapshot.current={...debugSnapshot.current,outcome:data.error?(data.reason==='capture-failure'?'CAPTURE FAILURE':'DETECTOR FAILURE'):'REJECTED: '+rejectReason};
                         invalidate(e instanceof Error?e.message:'Hold still to track',rejectReason);
                     }
                     recent.push({id:data.id,detected:found.length,accepted:Number(lastFrame.accepted),outcome:String(lastFrame.frameOutcome)});if(recent.length>8)recent.shift();
@@ -237,7 +278,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                     if(live.current&&state.phase!=='locked')invalidate('Waiting for a fresh tracking result','stale-frame');
                     else if(!live.current&&state.phase!==reportedPhase)invalidate('Tracking lost · show 3 markers',tracking.reason||'tracking-timeout');
                 },40);
-                schedule();
+                // The worker capability reply starts the single-flight loop.
             }
             catch (e) {
                 if (!stopped) {
@@ -265,8 +306,8 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
     function down(e: PointerEvent<HTMLDivElement>) {
         const p = poseRef.current;
         if(props.mode==='camera-stamp'){
-            if(props.disabled||precision.current||!p||!onVideo(location(e),viewport(p)))return;
-            if(centredGesture.begin(e.pointerId,location(e),phoneControls.current)){e.preventDefault();e.currentTarget.setPointerCapture(e.pointerId);}
+            if(props.disabled||precision.current)return;
+            if(centredGesture.begin(e.pointerId,{x:e.clientX,y:e.clientY},phoneControls.current)){e.preventDefault();e.currentTarget.setPointerCapture(e.pointerId);}
             return;
         }
         if (props.disabled || precision.current || !p || !tracking.read(performance.now()).stampable || !onVideo(location(e), viewport(p)) || pointers.current.size >= 2)
@@ -282,14 +323,8 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
         if(props.mode==='camera-stamp'){
             if(props.disabled||!centredGesture.has(e.pointerId))return;
             e.preventDefault();
-            const next=centredGesture.move(e.pointerId,location(e));
-            if(next){
-                phoneControls.current=next;
-                const p=poseRef.current;
-                // Keep the existing frozen-placement/stamping rules during HELD.
-                // Finger intent still accumulates against the original baseline.
-                if(p&&live.current&&tracking.read(performance.now()).phase==='locked')publishRef.current(updatePhone(p),p.at);
-            }
+            const next=centredGesture.move(e.pointerId,{x:e.clientX,y:e.clientY});
+            if(next){phoneControls.current=next;paintArtwork();}
             return;
         }
         if (props.disabled || !pointers.current.has(e.pointerId))
@@ -302,9 +337,9 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
         if(!gesture.current)return;
         publishRef.current(manipulate(gesture.current, worldPoints(p)), p.at);
     }
-    function up(e: PointerEvent<HTMLDivElement>) { if(props.mode==='camera-stamp'){centredGesture.end(e.pointerId);return;} pointers.current.delete(e.pointerId); rebase();phoneGesture.current={base:{...phoneControls.current},points:[...pointers.current.values()]}; }
-    let transform = '', crosshair: Point | null = null;
-    if (pose && view.current) {
+    function up(e: PointerEvent<HTMLDivElement>) { if(props.mode==='camera-stamp'){const active=centredGesture.has(e.pointerId);centredGesture.end(e.pointerId);if(active&&!centredGesture.active){const current=sample();if(current)publishRef.current(current.placement,current.at);}return;} pointers.current.delete(e.pointerId); rebase();phoneGesture.current={base:{...phoneControls.current},points:[...pointers.current.values()]}; }
+    let transform = '';
+    if (props.mode==='legacy' && pose && view.current) {
         const vp = videoViewport(size.width || view.current.clientWidth, size.height || view.current.clientHeight, pose.width, pose.height, 'contain', displayZoom);
         const corners = stickerCorners({ ...overlay, ...stampAsset(props.placement) }).map(p => imageToView(project(pose.inverse, p), vp));
         try {
@@ -312,14 +347,13 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
             transform = 'matrix3d(' + [m[0], m[3], 0, m[6], m[1], m[4], 0, m[7], 0, 0, 1, 0, m[2], m[5], 0, 1].join(',') + ')';
         }
         catch { /* Hide an invalid projection. */ }
-        if (props.mode==='camera-stamp')
-            crosshair = imageToView({ x: pose.width * .5, y: pose.height * .5 }, vp);
+
     }
     return <>
     <div ref={view} className="camera-view" aria-label="Camera sticker placement" onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onLostPointerCapture={up}>
-      <video ref={video} muted playsInline aria-label="Rear camera" style={{transform: 'scale('+displayZoom+')',transformOrigin:'50% 50%'}}/>
-      <img className="camera-stamp" src={stampSource(props.placement)} alt="Selected sticker" style={{ transform, display: transform ? 'block' : 'none', opacity: .85 }}/>
-      {crosshair && <span className="crosshair" style={{ left: crosshair.x, top: crosshair.y }}>+</span>}
+      <video ref={video} onLoadedMetadata={artworkLayout} onResize={artworkLayout} muted playsInline aria-label="Rear camera" style={{transform: 'scale('+displayZoom+')',transformOrigin:'50% 50%'}}/>
+      <img ref={sticker} className="camera-stamp" src={stampSource(props.placement)} alt="Selected sticker" style={props.mode==='camera-stamp'?{left:'50%',top:'50%',transformOrigin:'50% 50%',display:'block',opacity:.85}:{width:'100px',height:'100px',left:0,top:0,transformOrigin:'0 0',transform,display:transform?'block':'none',opacity:.85}}/>
+      {props.mode==='camera-stamp'&&<span className="crosshair" style={{left:'50%',top:'50%'}}>+</span>}
       {props.trackingDebug&&<TrackingDebug snapshot={video.current?.videoWidth&&debugView.width&&Math.abs(debugView.width/debugView.height-video.current.videoWidth/video.current.videoHeight)>.01?{...debugView,draw:false}:debugView} now={debugNow} width={size.width} height={size.height} zoom={displayZoom}/>}
     </div>
     <button className="display-zoom" aria-label="Display zoom" aria-pressed={displayZoom===2} title="Relative display zoom; tracking uses the full frame" disabled={props.disabled} onClick={toggleDisplayZoom}>{displayZoom}×</button>

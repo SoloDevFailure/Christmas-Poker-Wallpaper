@@ -11,12 +11,12 @@ export function screenStampFromWorld(p:Placement,inverse:number[],v:Viewport):Sc
  const left=map(-width/2,0),right=map(width/2,0),top=map(0,-height/2),bottom=map(0,height/2);
  return {centre:map(0,0),size:Math.max(Math.hypot(right.x-left.x,right.y-left.y),Math.hypot(bottom.x-top.x,bottom.y-top.y)),rotation:Math.atan2(right.y-left.y,right.x-left.x)*180/Math.PI};
 }
-export function phoneFixedPlacement(base:Placement,h:number[],v:Viewport,screen:ScreenStamp):Placement {
+export function phoneFixedPlacement(base:Placement,h:number[],v:Viewport,screen:ScreenStamp,clampScale=true):Placement {
  const r=screen.rotation*Math.PI/180,{width,height}=stampDimensions({...base,scale:screen.size});
  const map=(x:number,y:number)=>project(h,viewToImage({x:screen.centre.x+x*Math.cos(r)-y*Math.sin(r),y:screen.centre.y+x*Math.sin(r)+y*Math.cos(r)},v));
  const c=map(0,0),left=map(-width/2,0),right=map(width/2,0),top=map(0,-height/2),bottom=map(0,height/2);
  const scale=width>=height?Math.hypot(right.x-left.x,right.y-left.y):Math.hypot(bottom.x-top.x,bottom.y-top.y);
- return {...base,position_x:c.x/W,position_y:c.y/H,scale:Math.max(32,Math.min(600,scale)),rotation:wrapAngle(Math.atan2(right.y-left.y,right.x-left.x)*180/Math.PI)};
+ return {...base,position_x:c.x/W,position_y:c.y/H,scale:clampScale?Math.max(32,Math.min(600,scale)):scale,rotation:wrapAngle(Math.atan2(right.y-left.y,right.x-left.x)*180/Math.PI)};
 }
 export function resizePhoneStamp(base:{size:number;rotation:number},start:Point[],current:Point[]){
  if(start.length<2||current.length<2)return base;

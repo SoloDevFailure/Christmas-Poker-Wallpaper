@@ -110,12 +110,13 @@ export default function App() {
     }, [session?.id]);
     function message(e: unknown) { return e instanceof Error ? e.message : typeof e === 'object' && e && 'message' in e ? String(e.message) : String(e); }
     const canPlace = !!session && online && (!phone || !camera || locked) && validPlacement(placement);
-    async function preview() {
-        if (!canPlace || camera && !withinTrackingGrace(placementDeadline.current,performance.now()))
+    async function preview(sample?:StampSample) {
+        const submitted=sample?.placement||placement;
+        if (!canPlace || !validPlacement(submitted) || camera && !withinTrackingGrace(sample?.validUntil??placementDeadline.current,performance.now()))
             return;
         setError('');
         try {
-            const response = await channel.current!.send({ type: 'broadcast', event: 'preview', payload: { ...placement, sender: user, expires: Date.now() + 10000 } });
+            const response = await channel.current!.send({ type: 'broadcast', event: 'preview', payload: { ...submitted, sender: user, expires: Date.now() + 10000 } });
             if (response !== 'ok')
                 throw Error('Preview was not delivered. Try again.');
             setNotice('Preview sent · visible for 10 seconds');
@@ -188,7 +189,7 @@ export default function App() {
     }
     if (!session)
         return <main className="setup"><h1>CHRISTMAS POKER 2026</h1><p>{phone ? 'Join the shared wallpaper.' : 'A shared canvas for questionable Christmas creativity.'}</p>{!db && <p className="warning">Supabase is not configured. Add your public project URL and key to .env.local. See README.md.</p>}<form onSubmit={e => { e.preventDefault(); void connect(code.trim()); }}><label>Session code<input value={code} onChange={e => setCode(e.target.value)} autoCapitalize="none" autoCorrect="off" required/></label><button disabled={busy || !db}>Join session</button></form>{!phone && <button disabled={busy || !db} onClick={() => void connect()}>Create new wallpaper</button>}{error && <p role="alert" className="warning">{error}</p>}<p className="muted">Eight markers. Unlimited questionable creativity.</p></main>;
-    return <main className={phone ? 'phone-root' : 'desktop'}>{phone ? <PhoneController placement={placement} stamps={stamps} camera={camera} setCamera={enabled => { setLocked(false); setCamera(enabled); }} onChange={change} onCameraPlacement={cameraPlacement} onStatus={setTrackingStatus} online={online} busy={busy} canPlace={canPlace} preview={() => void preview()} stamp={sample => void stamp(sample)} notice={notice} error={error} dismissError={() => setError('')}/> : <><div className="wallpaper-wrap"><Wallpaper stamps={stamps} previews={Object.values(previews)} qr={qr}/></div><nav className="desktop-tools"><span className={online ? 'good' : 'lost'}>{online ? '● Live' : '● Connecting'}</span><span>{stamps.length} stamps</span><button onClick={() => document.documentElement.requestFullscreen().catch(e => setError(message(e)))}>Fullscreen</button><button onClick={() => void exportArt(stamps).catch(e => setError(message(e)))}>Export PNG</button>{user === session.owner_id && <button disabled={busy} onClick={() => void reset()}>Reset artwork</button>}<a href={phoneUrl} target="_blank" rel="noreferrer">Open phone controller</a></nav></>}
+    return <main className={phone ? 'phone-root' : 'desktop'}>{phone ? <PhoneController placement={placement} stamps={stamps} camera={camera} setCamera={enabled => { setLocked(false); setCamera(enabled); }} onChange={change} onCameraPlacement={cameraPlacement} onStatus={setTrackingStatus} online={online} busy={busy} canPlace={canPlace} preview={sample => void preview(sample)} stamp={sample => void stamp(sample)} notice={notice} error={error} dismissError={() => setError('')}/> : <><div className="wallpaper-wrap"><Wallpaper stamps={stamps} previews={Object.values(previews)} qr={qr}/></div><nav className="desktop-tools"><span className={online ? 'good' : 'lost'}>{online ? '● Live' : '● Connecting'}</span><span>{stamps.length} stamps</span><button onClick={() => document.documentElement.requestFullscreen().catch(e => setError(message(e)))}>Fullscreen</button><button onClick={() => void exportArt(stamps).catch(e => setError(message(e)))}>Export PNG</button>{user === session.owner_id && <button disabled={busy} onClick={() => void reset()}>Reset artwork</button>}<a href={phoneUrl} target="_blank" rel="noreferrer">Open phone controller</a></nav></>}
     {!phone && error && <p role="alert" className="warning">{error}<button onClick={() => setError('')}>Dismiss</button></p>}
     {!phone && <><label className="debug-toggle"><input type="checkbox" checked={debug} onChange={e => setDebug(e.target.checked)}/>Debug</label>{debug && <pre className="debug">{JSON.stringify({ session: session.id, receivedPreviews: Object.values(previews) }, null, 2)}</pre>}</>}
     </main>;

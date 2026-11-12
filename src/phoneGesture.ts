@@ -7,6 +7,7 @@ export class PhoneGesture {
  private fingers=new Map<number,Point>();
  private start:Point[]=[];
  private base:Transform|null=null;
+ get active(){return this.fingers.size>0;}
  has(id:number){return this.fingers.has(id);}
  begin(id:number,point:Point,value:Transform){
   if(this.has(id)||this.fingers.size>=2)return false;

@@ -5,6 +5,8 @@ import Aruco from 'js-aruco2';
 import PhoneController from '../src/PhoneController';
 import Wallpaper from '../src/Wallpaper';
 import {markers,SIZE,W,H} from '../src/geometry';
+import {screenStampFromWorld} from '../src/cameraPlacement';
+import {videoViewport} from '../src/manipulation';
 import {withinTrackingGrace} from '../src/trackingState';
 import type {Placement,Stamp} from '../src/types';
 import '../src/style.css';
@@ -12,9 +14,14 @@ const canvas=document.createElement('canvas');canvas.width=W;canvas.height=H;con
 const dictionary=new Aruco.AR.Dictionary('ARUCO');
 const images=await Promise.all(markers.map(async m=>{const image=new Image();image.src='data:image/svg+xml,'+encodeURIComponent(dictionary.generateSVG(m.id).replace('viewBox="0 0 9 9"','viewBox="1 1 7 7"'));await image.decode();return image;}));
 const unknownImage=new Image();unknownImage.src='data:image/svg+xml,'+encodeURIComponent(dictionary.generateSVG(999).replace('viewBox="0 0 9 9"','viewBox="1 1 7 7"'));await unknownImage.decode();
-let showUnknown=false;
+let showUnknown=false,freezeReplies=false,mainReads=0,placementUpdates=0;
+if(location.search.includes('independent')){
+ const fallback=location.search.includes('fallback');if(fallback)Object.defineProperty(window,'createImageBitmap',{configurable:true,value:undefined});
+ const read=CanvasRenderingContext2D.prototype.getImageData;CanvasRenderingContext2D.prototype.getImageData=function(...args:Parameters<typeof read>){mainReads++;if(fallback){const at=performance.now();while(performance.now()-at<80){/* Simulated blocking legacy readback. */}}return read.apply(this,args);};
+ const NativeWorker=window.Worker;window.Worker=class extends NativeWorker{private deliver:((e:MessageEvent)=>void)|null=null;constructor(url:string|URL,options?:WorkerOptions){super(url,options);super.onmessage=e=>{if(e.data.type==='ready'||!freezeReplies)this.deliver?.(e);else setTimeout(()=>this.deliver?.(e),1800);};}override set onmessage(value:((e:MessageEvent)=>void)|null){this.deliver=value;}override get onmessage(){return this.deliver;}} as typeof Worker;
+}
 let selection:number[]|null=null;
-let count=8,offset=0,requests=0,last:Placement|null=null,saved:Placement[]=[],manual=false;
+let count=8,offset=0,requests=0,last:Placement|null=null,previewed:Placement|null=null,saved:Placement[]=[],manual=false;
 function draw(){ctx.fillStyle='#06281f';ctx.fillRect(0,0,W,H);ctx.save();ctx.translate(96+offset,54);ctx.scale(.9,.9);(selection||[0,2,5,7,1,3,4,6]).slice(0,count).forEach(i=>{const m=markers[i];ctx.fillStyle='white';ctx.fillRect(m.x-24,m.y-24,SIZE+48,SIZE+48);ctx.drawImage(images[i],m.x,m.y,SIZE,SIZE);});if(showUnknown){ctx.fillStyle='white';ctx.fillRect(W/2-78,H/2-78,156,156);ctx.drawImage(unknownImage,W/2-54,H/2-54,108,108);}ctx.restore();}
 draw();setInterval(draw,40);
 Object.defineProperty(navigator.mediaDevices,'getUserMedia',{configurable:true,value:async()=>{requests++;return canvas.captureStream(20);}});
@@ -27,10 +34,10 @@ if(location.search.includes('slow')){const NativeWorker=window.Worker;window.Wor
  override get onmessage(){return this.deliver;}
 } as typeof Worker;}
 function Harness(){const [p,setP]=useState<Placement>({stamp_type:'star',position_x:.5,position_y:.5,scale:160,rotation:0}),[camera,setCamera]=useState(true),[locked,setLocked]=useState(false),[stamps,setStamps]=useState<Stamp[]>([]);
- return <PhoneController placement={p} stamps={stamps} camera={camera} setCamera={value=>{manual=!value;setCamera(value);}} onChange={value=>{last=value;setP(value);}} onCameraPlacement={value=>{setLocked(!!value);if(value){last=value;setP(value);}}} onStatus={()=>{}} online busy={false} canPlace={!camera||locked} preview={()=>{}} stamp={sample=>{if(sample&&!withinTrackingGrace(sample.validUntil,performance.now()))throw Error('Expired Camera sample passed submission guard');const value=sample?.placement||p;saved.push(value);setStamps(rows=>[...rows,{...value,id:String(rows.length),session_id:'test',created_at:'',sequence:rows.length}]);}} notice="" error="" dismissError={()=>{}}/>;
+ return <PhoneController placement={p} stamps={stamps} camera={camera} setCamera={value=>{manual=!value;setCamera(value);}} onChange={value=>{last=value;setP(value);}} onCameraPlacement={value=>{placementUpdates++;setLocked(!!value);if(value){last=value;setP(value);}}} onStatus={()=>{}} online busy={false} canPlace={!camera||locked} preview={sample=>{previewed=sample?.placement||p;}} stamp={sample=>{if(sample&&!withinTrackingGrace(sample.validUntil,performance.now()))throw Error('Expired Camera sample passed submission guard');const value=sample?.placement||p;saved.push(value);setStamps(rows=>[...rows,{...value,id:String(rows.length),session_id:'test',created_at:'',sequence:rows.length}]);}} notice="" error="" dismissError={()=>{}}/>;
 }
 if(location.search.includes('wallpaper'))createRoot(document.getElementById('root')!).render(<Wallpaper stamps={[]} previews={[]} qr=""/>);
-else{createRoot(document.getElementById('root')!).render(<Harness/>);setTimeout(()=>void (location.search.includes('slow')?checkSlow():location.search.includes('gestures')?checkGestures():check()),0);}
+else{createRoot(document.getElementById('root')!).render(<Harness/>);setTimeout(()=>void (location.search.includes('slow')?checkSlow():location.search.includes('gestures')?checkGestures():location.search.includes('independent')?checkIndependent():check()),0);}
 const wait=(ms:number)=>new Promise(r=>setTimeout(r,ms));
 async function check(){const output=document.createElement('output');output.id='qa-test-result';output.style.cssText='position:fixed;left:8px;bottom:80px;z-index:99;background:#111;color:white;font:11px monospace;padding:8px;max-width:95vw';document.body.append(output);
  const ensure=(value:unknown,message:string)=>{if(!value)throw Error(message);};
@@ -98,4 +105,26 @@ async function checkGestures(){const out=document.createElement('output');out.id
  for(let i=1;i<=20;i++){transform(100-i,-i);await wait(20);}
  await expected(initial.scale*1.4*.8,20);event('pointerup',1,cx,cy);event('pointerup',2,cx,cy);await wait(80);const final={...last!};(document.querySelector('.phone-actions button:last-child') as HTMLElement).click();await wait(80);ensure(saved.length===1&&Math.abs(saved[0].scale-final.scale)<2&&Math.abs(saved[0].rotation-final.rotation)<1,'Committed stamp differs from final preview');
  out.textContent='PASS: continuous scale + rotation across camera/parent rerenders and HELD recovery; centred preview; release/restart without snapping; committed transform matches';
+ }catch(e){out.textContent='FAIL: '+e;}}
+
+async function checkIndependent(){const out=document.createElement('output');out.id='qa-test-result';document.body.append(out);const ensure=(v:unknown,m:string)=>{if(!v)throw Error(m);};
+ async function until(predicate:()=>boolean,label:string){for(let i=0;i<160&&!predicate();i++)await wait(50);ensure(predicate(),label);}
+ try{await until(()=>!!document.querySelector('.tracking-status.locked'),'Camera did not lock');
+ const image=document.querySelector('.camera-stamp') as HTMLImageElement,stage=document.querySelector('.camera-view') as HTMLElement,source=image.src,cx=innerWidth/2,cy=innerHeight/2;stage.setPointerCapture=()=>{};
+ const visualSize=()=>parseFloat(image.style.width)*parseFloat(image.style.transform.split('scale(')[1]);const width=visualSize();ensure(width>0,'Missing screen preview');ensure(location.search.includes('fallback')?mainReads>0:mainReads===0,'Unexpected camera capture path');
+ freezeReplies=!location.search.includes('fallback');count=0;draw();await until(()=>(document.querySelector('.phone-actions button:last-child') as HTMLButtonElement).disabled,'LOST did not disable Stamp');
+ ensure(getComputedStyle(image).display!=='none'&&image.getBoundingClientRect().width>0,'LOST hid artwork');const callbacks=placementUpdates;
+ function event(type:string,id:number,x:number,y:number){stage.dispatchEvent(new PointerEvent(type,{pointerId:id,pointerType:'touch',clientX:x,clientY:y,bubbles:true,cancelable:true,buttons:type==='pointerup'?0:1}));}
+ event('pointerdown',1,cx-50,cy);event('pointerdown',2,cx+50,cy);
+ let worst=0;const readsBeforeGesture=mainReads;
+ for(let i=1;i<=40;i++){const angle=i*Math.PI/180,d=100+i/2;event('pointermove',1,cx-d/2*Math.cos(angle),cy-d/2*Math.sin(angle));event('pointermove',2,cx+d/2*Math.cos(angle),cy+d/2*Math.sin(angle));const at=performance.now();await new Promise<void>(resolve=>requestAnimationFrame(()=>resolve()));worst=Math.max(worst,performance.now()-at);ensure(Math.abs(visualSize()-width*d/100)<.1,'Visual feedback waited for tracking');ensure(image.style.transform.includes('rotate('+i+'deg)')||Math.abs(parseFloat(image.style.transform.split('rotate(')[1])-i)<.01,'Rotation waited for tracking');}
+ ensure(placementUpdates-callbacks<5,'Pointer moves published React placement state');ensure(mainReads===readsBeforeGesture,'Blocking readback ran during gesture');
+ event('pointerup',1,cx,cy);event('pointerup',2,cx,cy);const finalStyle=image.style.transform,finalWidth=image.style.width;await wait(80);ensure(image.style.width===finalWidth&&image.style.transform===finalStyle,'Release reset screen transform');
+ (document.querySelector('.phone-actions button:last-child') as HTMLElement).click();ensure(saved.length===0,'LOST committed a stamp');
+ freezeReplies=false;count=8;draw();await until(()=>!!document.querySelector('.tracking-status.locked'),'Tracking did not recover');ensure(document.querySelector('.camera-stamp')===image&&image.src===source,'Tracking recreated artwork');ensure(image.style.width===finalWidth&&image.style.transform===finalStyle,'Recovery changed screen transform');
+ const before=last!.scale;freezeReplies=true;event('pointerdown',1,cx-50,cy);event('pointerdown',2,cx+50,cy);event('pointermove',1,cx-55,cy);event('pointermove',2,cx+55,cy);await new Promise<void>(resolve=>requestAnimationFrame(()=>resolve()));
+ (document.querySelector('.phone-actions button:first-child') as HTMLElement).click();ensure(previewed&&Math.abs(previewed.scale-before*1.1)<2,'Preview used stale React transform values');
+ (document.querySelector('.phone-actions button:last-child') as HTMLElement).click();await wait(50);ensure(saved.length===1,'Fresh stamp did not commit');event('pointerup',1,cx,cy);event('pointerup',2,cx,cy);const projected=screenStampFromWorld(saved[0], [.81,0,182.4,0,.81,102.6,0,0],videoViewport(innerWidth,innerHeight,W,H,'contain',2));
+ ensure(Math.abs(projected.size-visualSize())<3&&Math.abs(projected.rotation-40)<1,'Saved stamp differs from screen preview');
+ out.textContent='PASS: visible/manipulable while LOST, per-animation-frame response with stalled tracking, no per-move React publication, no blocking gesture readbacks, stable recovery, matching saved transform (worst rAF '+Math.round(worst)+'ms)';
  }catch(e){out.textContent='FAIL: '+e;}}
