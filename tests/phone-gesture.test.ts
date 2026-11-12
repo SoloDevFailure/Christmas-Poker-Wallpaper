@@ -1,0 +1,12 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {PhoneGesture} from '../src/phoneGesture.ts';
+const close=(a:number,b:number)=>assert.ok(Math.abs(a-b)<1e-9,a+' != '+b);
+function fingers(distance:number,degrees=0){const r=degrees*Math.PI/180;return [{x:200-distance/2*Math.cos(r),y:200-distance/2*Math.sin(r)},{x:200+distance/2*Math.cos(r),y:200+distance/2*Math.sin(r)}];}
+function begin(g:PhoneGesture,base={size:.2,rotation:0}){const [a,b]=fingers(100);g.begin(10,a,base);g.begin(20,b,base);}
+function move(g:PhoneGesture,distance:number,angle=0){const [a,b]=fingers(distance,angle);g.move(10,a);return g.move(20,b)!;}
+test('continuous pinch uses the original baseline through many pointer moves',()=>{const g=new PhoneGesture();begin(g);for(let d=101;d<=200;d++){const p=move(g,d);close(p.size,.2*d/100);close(p.rotation,0);}for(let d=199;d>=50;d--)close(move(g,d).size,.2*d/100);});
+test('continuous rotation crosses angle wrap without dropping fingers',()=>{const g=new PhoneGesture();begin(g);for(let a=1;a<=540;a++){const p=move(g,100,a);close(p.size,.2);close(Math.sin(p.rotation*Math.PI/180),Math.sin(a*Math.PI/180));close(Math.cos(p.rotation*Math.PI/180),Math.cos(a*Math.PI/180));}});
+test('scale and rotation update simultaneously without moving a screen centre',()=>{const g=new PhoneGesture();begin(g,{size:.2,rotation:15});for(let i=1;i<=80;i++){const p=move(g,100+i,i);close(p.size,.2*(100+i)/100);close(p.rotation,15+i);assert.deepEqual(Object.keys(p),['size','rotation']);}});
+test('duplicate starts and unrelated capture-loss events cannot reset an active baseline',()=>{const g=new PhoneGesture();begin(g);move(g,120,20);assert.equal(g.begin(10,{x:0,y:0},{size:.8,rotation:80}),false);assert.equal(g.begin(30,{x:0,y:0},{size:.8,rotation:80}),false);g.end(30);const p=move(g,150,45);close(p.size,.3);close(p.rotation,45);});
+test('release and restart retain final values, including replacing one finger',()=>{const g=new PhoneGesture();begin(g);const first=move(g,140,30);g.end(10);g.end(10);g.end(20);const [a,b]=fingers(100,30);g.begin(10,a,first);g.begin(20,b,first);let p=move(g,100,30);close(p.size,first.size);close(p.rotation,first.rotation);p=move(g,80,45);close(p.size,first.size*.8);close(p.rotation,45);g.end(20);assert.equal(g.move(10,a),null);g.begin(30,b,p);const noJump=g.move(30,b)!;close(noJump.size,p.size);close(noJump.rotation,p.rotation);});

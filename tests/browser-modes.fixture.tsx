@@ -30,7 +30,7 @@ function Harness(){const [p,setP]=useState<Placement>({stamp_type:'star',positio
  return <PhoneController placement={p} stamps={stamps} camera={camera} setCamera={value=>{manual=!value;setCamera(value);}} onChange={value=>{last=value;setP(value);}} onCameraPlacement={value=>{setLocked(!!value);if(value){last=value;setP(value);}}} onStatus={()=>{}} online busy={false} canPlace={!camera||locked} preview={()=>{}} stamp={sample=>{if(sample&&!withinTrackingGrace(sample.validUntil,performance.now()))throw Error('Expired Camera sample passed submission guard');const value=sample?.placement||p;saved.push(value);setStamps(rows=>[...rows,{...value,id:String(rows.length),session_id:'test',created_at:'',sequence:rows.length}]);}} notice="" error="" dismissError={()=>{}}/>;
 }
 if(location.search.includes('wallpaper'))createRoot(document.getElementById('root')!).render(<Wallpaper stamps={[]} previews={[]} qr=""/>);
-else{createRoot(document.getElementById('root')!).render(<Harness/>);setTimeout(()=>void (location.search.includes('slow')?checkSlow():check()),0);}
+else{createRoot(document.getElementById('root')!).render(<Harness/>);setTimeout(()=>void (location.search.includes('slow')?checkSlow():location.search.includes('gestures')?checkGestures():check()),0);}
 const wait=(ms:number)=>new Promise(r=>setTimeout(r,ms));
 async function check(){const output=document.createElement('output');output.id='qa-test-result';output.style.cssText='position:fixed;left:8px;bottom:80px;z-index:99;background:#111;color:white;font:11px monospace;padding:8px;max-width:95vw';document.body.append(output);
  const ensure=(value:unknown,message:string)=>{if(!value)throw Error(message);};
@@ -76,4 +76,26 @@ async function checkSlow(){for(let i=0;i<100&&!document.querySelector('button[ar
   await wait(50);
  }
  out.textContent='PASS: slow delivery retains fixed 1280px processing; over-age results cannot authorise stamping';
+ }catch(e){out.textContent='FAIL: '+e;}}
+
+async function checkGestures(){const out=document.createElement('output');out.id='qa-test-result';document.body.append(out);
+ const ensure=(condition:unknown,message:string)=>{if(!condition)throw Error(message);};
+ async function locked(){for(let i=0;i<120&&!document.querySelector('.tracking-status.locked');i++)await wait(50);ensure(document.querySelector('.tracking-status.locked'),'Camera never locked');}
+ try{await locked();const stage=document.querySelector('.camera-view') as HTMLElement,video=document.querySelector('video'),initial={...last!},cx=innerWidth/2,cy=innerHeight/2;stage.setPointerCapture=()=>{};
+ function event(type:string,id:number,x:number,y:number){stage.dispatchEvent(new PointerEvent(type,{pointerId:id,pointerType:'touch',clientX:x,clientY:y,bubbles:true,cancelable:true,buttons:type==='pointerup'?0:1}));}
+ function transform(distance:number,angle:number){const a=angle*Math.PI/180,dx=distance/2*Math.cos(a),dy=distance/2*Math.sin(a);event('pointermove',1,cx-dx,cy-dy);event('pointermove',2,cx+dx,cy+dy);}
+ function start(){event('pointerdown',1,cx-50,cy);event('pointerdown',2,cx+50,cy);}
+ async function expected(scale:number,rotation:number){for(let i=0;i<60;i++){if(last&&Math.abs(last.scale-scale)<2&&Math.abs(last.rotation-rotation)<1)break;await wait(30);}ensure(Math.abs(last!.scale-scale)<2,'Continuous gesture scale drift '+last!.scale+' vs '+scale);ensure(Math.abs(last!.rotation-rotation)<1,'Continuous gesture rotation drift');const r=(document.querySelector('.camera-stamp') as HTMLElement).getBoundingClientRect();ensure(Math.hypot(r.x+r.width/2-cx,r.y+r.height/2-cy)<2,'Transform moved sticker off centre');}
+ start();
+ for(let i=1;i<=20;i++){transform(100+i,i);await wait(25);}
+ await expected(initial.scale*1.2,20);
+ // Keep BOTH fingers down across real Camera + parent rerenders and recovery.
+ count=2;draw();await wait(260);transform(130,30);await wait(100);count=8;draw();await locked();await wait(100);
+ for(let i=31;i<=40;i++){transform(100+i,i);await wait(25);}
+ await expected(initial.scale*1.4,40);ensure(document.querySelector('video')===video&&requests===1,'Gesture restarted the camera');
+ event('pointerup',1,cx,cy);event('lostpointercapture',1,cx,cy);event('pointerup',2,cx,cy);event('lostpointercapture',2,cx,cy);await wait(100);await expected(initial.scale*1.4,40);
+ start();transform(100,0);await expected(initial.scale*1.4,40);
+ for(let i=1;i<=20;i++){transform(100-i,-i);await wait(20);}
+ await expected(initial.scale*1.4*.8,20);event('pointerup',1,cx,cy);event('pointerup',2,cx,cy);await wait(80);const final={...last!};(document.querySelector('.phone-actions button:last-child') as HTMLElement).click();await wait(80);ensure(saved.length===1&&Math.abs(saved[0].scale-final.scale)<2&&Math.abs(saved[0].rotation-final.rotation)<1,'Committed stamp differs from final preview');
+ out.textContent='PASS: continuous scale + rotation across camera/parent rerenders and HELD recovery; centred preview; release/restart without snapping; committed transform matches';
  }catch(e){out.textContent='FAIL: '+e;}}

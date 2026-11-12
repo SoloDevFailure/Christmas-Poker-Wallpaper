@@ -3,10 +3,11 @@ import { markerCorners, homography, markers, project, W, H, type Point } from '.
 import { MAX_TRACKING_AGE, videoViewport, viewToImage, imageToView, onVideo, manipulate, stickerCorners, type Gesture } from './manipulation';
 import { validPlacement, stampAsset, type Placement } from './types';
 import { stampSource } from './art';
+import {PhoneGesture} from './phoneGesture';
 import TrackingDebug from './TrackingDebugger';
 import {emptyDebug,frameMarkerDecisions,type DebugSnapshot} from './trackingDebug';
 import {TrackingState,processingFrame,FRAME_PAUSE,FrameGate} from './trackingState';
-import { phoneFixedPlacement,screenStampFromWorld,resizePhoneStamp,smoothTracking,trackingMotion,phoneReference,type CameraHandle,type ScreenStamp } from './cameraPlacement';
+import { phoneFixedPlacement,screenStampFromWorld,smoothTracking,trackingMotion,phoneReference,type CameraHandle,type ScreenStamp } from './cameraPlacement';
 type Pose = {
     h: number[];
     inverse: number[];
@@ -44,6 +45,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
     const [displayZoom,setDisplayZoom]=useState<1|2>(2);
     const zoomRef=useRef<1|2>(2);
     const phoneControls=useRef({size:.56,rotation:0}),phoneGesture=useRef<{base:{size:number;rotation:number};points:Point[]}|null>(null),precision=useRef<ScreenStamp|null>(null);
+    const centredGesture=useRef(new PhoneGesture()).current;
     function cancelPrecision(){precision.current=null;latest.current.onPrecisionChange(false);}
     function frozenPlacement(){
         const p=lastReliable.current;if(!p)return null;
@@ -55,8 +57,8 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
     useImperativeHandle(ref,()=>({sample,beginPrecision(){const p=poseRef.current;if(latest.current.mode!=='legacy'||!p||!sample())return false;precision.current=screenStampFromWorld(artwork.current,p.inverse,viewport(p));pointers.current.clear();gesture.current=null;latest.current.onPrecisionChange(true);return true;},endPrecision(){const result=precision.current?sample():null;cancelPrecision();return result;},cancelPrecision}));
     function phoneScreen(p:Pose):ScreenStamp {const v=viewport(p);return {centre:{x:v.width/2,y:v.height/2},size:phoneControls.current.size*phoneReference(v,zoomRef.current),rotation:phoneControls.current.rotation};}
     function updatePhone(p:Pose){return phoneFixedPlacement(artwork.current,p.h,viewport(p),precision.current||phoneScreen(p));}
-    useEffect(()=>{cancelPrecision();pointers.current.clear();gesture.current=null;phoneGesture.current=null;anchored.current=true;const p=poseRef.current;if(p&&props.mode==='camera-stamp'){const s=screenStampFromWorld(artwork.current,p.inverse,viewport(p)),v=viewport(p);phoneControls.current={size:Math.max(.06,Math.min(.85,s.size/phoneReference(v,zoomRef.current))),rotation:s.rotation};}},[props.mode]);
-    useEffect(()=>{if(props.disabled){cancelPrecision();pointers.current.clear();gesture.current=null;}},[props.disabled]);
+    useEffect(()=>{centredGesture.clear();cancelPrecision();pointers.current.clear();gesture.current=null;phoneGesture.current=null;anchored.current=true;const p=poseRef.current;if(p&&props.mode==='camera-stamp'){const s=screenStampFromWorld(artwork.current,p.inverse,viewport(p)),v=viewport(p);phoneControls.current={size:Math.max(.06,Math.min(.85,s.size/phoneReference(v,zoomRef.current))),rotation:s.rotation};}},[props.mode]);
+    useEffect(()=>{if(props.disabled){centredGesture.clear();cancelPrecision();pointers.current.clear();gesture.current=null;}},[props.disabled]);
     const previousReset = useRef(props.aimReset);
     useEffect(() => {
         if (props.debug)
@@ -262,6 +264,11 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
     function location(e: PointerEvent<HTMLDivElement>): Point { const r = e.currentTarget.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
     function down(e: PointerEvent<HTMLDivElement>) {
         const p = poseRef.current;
+        if(props.mode==='camera-stamp'){
+            if(props.disabled||precision.current||!p||!onVideo(location(e),viewport(p)))return;
+            if(centredGesture.begin(e.pointerId,location(e),phoneControls.current)){e.preventDefault();e.currentTarget.setPointerCapture(e.pointerId);}
+            return;
+        }
         if (props.disabled || precision.current || !p || !tracking.read(performance.now()).stampable || !onVideo(location(e), viewport(p)) || pointers.current.size >= 2)
             return;
         e.preventDefault();
@@ -272,6 +279,19 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
         phoneGesture.current={base:{...phoneControls.current},points:[...pointers.current.values()]};
     }
     function move(e: PointerEvent<HTMLDivElement>) {
+        if(props.mode==='camera-stamp'){
+            if(props.disabled||!centredGesture.has(e.pointerId))return;
+            e.preventDefault();
+            const next=centredGesture.move(e.pointerId,location(e));
+            if(next){
+                phoneControls.current=next;
+                const p=poseRef.current;
+                // Keep the existing frozen-placement/stamping rules during HELD.
+                // Finger intent still accumulates against the original baseline.
+                if(p&&live.current&&tracking.read(performance.now()).phase==='locked')publishRef.current(updatePhone(p),p.at);
+            }
+            return;
+        }
         if (props.disabled || !pointers.current.has(e.pointerId))
             return;
         e.preventDefault();
@@ -280,10 +300,9 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
         if (!p || precision.current)return;
         if(!live.current||tracking.read(performance.now()).phase!=='locked'){needsRebase.current=true;return;}
         if(!gesture.current)return;
-        if(props.mode==='camera-stamp'){const g=phoneGesture.current;if(g)phoneControls.current=resizePhoneStamp(g.base,g.points,[...pointers.current.values()]);publishRef.current(updatePhone(p),p.at);}
-        else publishRef.current(manipulate(gesture.current, worldPoints(p)), p.at);
+        publishRef.current(manipulate(gesture.current, worldPoints(p)), p.at);
     }
-    function up(e: PointerEvent<HTMLDivElement>) { pointers.current.delete(e.pointerId); rebase();phoneGesture.current={base:{...phoneControls.current},points:[...pointers.current.values()]}; }
+    function up(e: PointerEvent<HTMLDivElement>) { if(props.mode==='camera-stamp'){centredGesture.end(e.pointerId);return;} pointers.current.delete(e.pointerId); rebase();phoneGesture.current={base:{...phoneControls.current},points:[...pointers.current.values()]}; }
     let transform = '', crosshair: Point | null = null;
     if (pose && view.current) {
         const vp = videoViewport(size.width || view.current.clientWidth, size.height || view.current.clientHeight, pose.width, pose.height, 'contain', displayZoom);
