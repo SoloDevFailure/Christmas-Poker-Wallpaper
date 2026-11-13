@@ -2,15 +2,18 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAiHandler, readLimited, type Dependencies, CARTOON_PROMPT } from '../supabase/functions/ai-stamp/core';
 import { assertStickerTransparency, decodePng, MAX_AI_UPLOAD } from '../supabase/functions/ai-stamp/png';
+import { openAiDiagnostic, sanitiseMessage, type OpenAiDiagnostic } from '../supabase/functions/ai-stamp/diagnostics';
 import { pngFixture } from './ai-png.fixture';
 const session = '11111111-1111-4111-8111-111111111111', requestId = '22222222-2222-4222-8222-222222222222';
 function request(png: Uint8Array = pngFixture(), token = 'valid-token', id = requestId) {
   const form = new FormData(); form.set('session_id', session); form.set('request_id', id); form.set('image', new Blob([Uint8Array.from(png)], { type: 'image/png' }), 'photo.png');
   return new Request('https://test.invalid/ai-stamp', { method: 'POST', headers: token ? { Authorization: `Bearer ${token}`, Origin: 'https://event.invalid' } : {}, body: form });
 }
-function harness(options: { rejection?: string; upstreamStatus?: number; upstreamCode?: string; output?: Buffer; networkError?: boolean; authenticated?: boolean; finishFails?: boolean } = {}) {
+function harness(options: { rejection?: string; upstreamStatus?: number; upstreamCode?: string; upstreamMessage?: string; upstreamType?: string; upstreamParam?: string; upstreamRaw?: string; loggerFails?: boolean; output?: Buffer; networkError?: boolean; authenticated?: boolean; finishFails?: boolean } = {}) {
+  const logs: OpenAiDiagnostic[] = [];
   let calls = 0, reservations = 0; const finished: { status: string; code?: string }[] = [], seen = new Set<string>();
   const deps: Dependencies = {
+    logDiagnostic: entry => { if (options.loggerFails) throw Error('logger unavailable'); logs.push(entry); },
     authenticate: async () => options.authenticated === false ? null : 'authenticated-user',
     reserve: async args => { reservations++; assert.equal(args.user, 'authenticated-user'); assert.match(args.hash, /^[a-f0-9]{64}$/);
       if (options.rejection) throw Error(options.rejection);
@@ -19,14 +22,14 @@ function harness(options: { rejection?: string; upstreamStatus?: number; upstrea
     finish: async (_, status, code) => { if (options.finishFails) throw Error('db offline'); finished.push({ status, code }); return true; },
     fetch: async (url, init) => {
       calls++; assert.equal(url, 'https://api.openai.com/v1/images/edits');
-      const form = init!.body as FormData; assert.equal(form.get('model'), 'gpt-image-2'); assert.equal(form.get('prompt'), CARTOON_PROMPT);
-      assert.equal(form.get('quality'), 'low'); assert.equal(form.get('background'), 'transparent'); assert.equal(form.get('n'), '1'); assert.equal(form.get('output_format'), 'png'); assert.equal(form.get('output_compression'), null);
+      const form = init!.body as FormData; assert.equal(form.get('model'), 'gpt-image-2.5-flare'); assert.equal(form.get('prompt'), CARTOON_PROMPT);
+      assert.equal(form.get('quality'), 'medium'); assert.equal(form.get('size'), '1024x1024'); assert.equal(form.get('input_fidelity'), null); assert.equal(form.get('background'), 'transparent'); assert.equal(form.get('n'), '1'); assert.equal(form.get('output_format'), 'png'); assert.equal(form.get('output_compression'), null);
       if (options.networkError) throw Error('private-api-key MUST NOT APPEAR');
-      return new Response(JSON.stringify(options.upstreamStatus ? { error: { code: options.upstreamCode, message: 'private upstream details' } } : { data: [{ b64_json: (options.output || pngFixture()).toString('base64') }], usage: { input_tokens: 1, output_tokens: 2 } }), { status: options.upstreamStatus || 200 });
+      return new Response(options.upstreamRaw ?? JSON.stringify(options.upstreamStatus ? { error: { code: options.upstreamCode, type: options.upstreamType, param: options.upstreamParam, message: options.upstreamMessage ?? 'private upstream details' } } : { data: [{ b64_json: (options.output || pngFixture()).toString('base64') }], usage: { input_tokens: 1, output_tokens: 2 } }), { status: options.upstreamStatus || 200, headers: { 'x-request-id': 'req_test-upstream' } });
     },
   };
-  const handler = createAiHandler({ model: 'gpt-image-2', event: 'event', origins: ['https://event.invalid'], openaiKey: 'private-api-key' }, deps);
-  return { handler, stats: () => ({ calls, reservations, finished }) };
+  const handler = createAiHandler({ model: 'gpt-image-2.5-flare', event: 'event', origins: ['https://event.invalid'], openaiKey: 'private-api-key' }, deps);
+  return { handler, stats: () => ({ calls, reservations, finished, logs }) };
 }
 test('PNG validation decodes all five filters and requires real useful alpha', () => {
   const expected = decodePng(pngFixture()).data;
@@ -90,4 +93,64 @@ test('streaming size and time limits apply even without a Content-Length header'
   await assert.rejects(readLimited(big, 32, 100), /large/);
   const slow = new ReadableStream<Uint8Array>({ start() {} });
   await assert.rejects(readLimited(slow, 32, 10), /timed out/);
+});
+
+test('upstream 400 diagnostics preserve safe status/type/code/parameter without changing the client or quota outcome', async () => {
+  const h = harness({ upstreamStatus: 400, upstreamCode: 'invalid_value', upstreamType: 'invalid_request_error', upstreamParam: 'background',
+    upstreamMessage: "Invalid value: 'transparent'. Supported values are: 'opaque' and 'auto'." });
+  const response = await h.handler(request());
+  assert.equal(response.status, 502);
+  const body = await response.json();
+  assert.equal(body.code, 'AI_API_ERROR'); assert.ok(!JSON.stringify(body).includes('Supported values'));
+  assert.equal(h.stats().calls, 1); assert.equal(h.stats().finished[0].status, 'failed');
+  assert.deepEqual(h.stats().logs, [{
+    event: 'ai_stamp_openai_error', job_id: requestId, model: 'gpt-image-2.5-flare',
+    upstream_status: 400, openai_request_id: 'req_test-upstream',
+    error_code: 'invalid_value', error_type: 'invalid_request_error', error_param: 'background',
+    message: "Invalid value: 'transparent'. Supported values are: 'opaque' and 'auto'.",
+  }]);
+});
+test('diagnostic messages redact credentials, image data, URLs, emails, control characters and arbitrary quoted values', () => {
+  const key = 'sk-proj-diagnostic-secret', token = 'signed-session-secret';
+  const message = [
+    'Invalid parameter background.', key, 'Bearer ' + token,
+    'sk-other-masked*********key', 'Authorization: another-secret',
+    'api_key="hidden-credential"', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJleGFtcGxlIn0.signature_value',
+    'data:image/png;base64,' + 'A'.repeat(200), 'B'.repeat(200),
+    'https://example.invalid/private?token=secret', 'private@example.invalid',
+    "'private text reflected from input'", '\nFORGED\u202eLOG\u0000',
+  ].join(' ');
+  const safe = sanitiseMessage(message, [key, token]);
+  for (const forbidden of [key, token, 'another-secret', 'hidden-credential', 'eyJ', 'AAAA', 'BBBB', 'example.invalid', 'private@example', 'private text', '\n', '\u202e', '\u0000', 'sk-other'])
+    assert.ok(!safe.includes(forbidden), forbidden);
+  assert.ok(safe.includes('Invalid parameter background'));
+  assert.ok(safe.length <= 512);
+  assert.equal(sanitiseMessage(null, []), 'OpenAI returned no structured error message.');
+  assert.ok(!sanitiseMessage('prefix ' + key.repeat(500), [key]).includes(key));
+  assert.ok(sanitiseMessage('x'.repeat(2000), []).length <= 512);
+});
+test('safe diagnostic fields reject header injection, objects, secrets and non-identifier values', () => {
+  const log = openAiDiagnostic({ job: requestId, model: 'gpt-image-2.5-flare', status: 422, requestId: 'Bearer header-secret' },
+    { code: { leaked: 'secret' }, type: 'sk-proj-secret', param: 'Authorization: Bearer secret', message: 'Short useful error.' }, ['secret']);
+  assert.equal(log.error_code, null); assert.equal(log.error_type, null); assert.equal(log.error_param, null); assert.equal(log.openai_request_id, null);
+  assert.deepEqual(Object.keys(log).sort(), ['event', 'job_id', 'model', 'upstream_status', 'openai_request_id', 'error_code', 'error_type', 'error_param', 'message'].sort());
+});
+test('non-JSON upstream failures log status and a static message without echoing the raw body', async () => {
+  const h = harness({ upstreamStatus: 400, upstreamRaw: '<html>Bearer secret data:image/png;base64,privatephotograph</html>' });
+  const response = await h.handler(request());
+  assert.equal((await response.json()).code, 'UPSTREAM_UNCERTAIN');
+  const [log] = h.stats().logs;
+  assert.equal(log.upstream_status, 400); assert.equal(log.error_type, 'unreadable_response');
+  assert.ok(!JSON.stringify(log).includes('privatephotograph')); assert.ok(!JSON.stringify(log).includes('Bearer'));
+  assert.equal(h.stats().finished[0].status, 'unknown'); assert.equal(h.stats().calls, 1);
+});
+test('failed HTTP responses are logged across status classes and logger failure never affects finalisation', async () => {
+  for (const status of [400, 401, 403, 404, 422, 429, 500]) {
+    const h = harness({ upstreamStatus: status, upstreamType: 'invalid_request_error' });
+    await h.handler(request());
+    assert.equal(h.stats().logs.length, 1); assert.equal(h.stats().logs[0].upstream_status, status); assert.equal(h.stats().calls, 1);
+  }
+  const h = harness({ upstreamStatus: 400, loggerFails: true }); const response = await h.handler(request());
+  assert.equal((await response.json()).code, 'AI_API_ERROR'); assert.equal(h.stats().finished[0].status, 'failed');
+  const success = harness(); assert.equal((await success.handler(request())).status, 200); assert.deepEqual(success.stats().logs, []);
 });

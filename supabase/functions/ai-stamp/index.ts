@@ -1,7 +1,8 @@
 import { createAiHandler, type Dependencies } from './core.ts';
 
 // The only runtime-specific entry point. Everything else is tested without keys
-// or paid generations. No request headers, photographs or API errors are logged.
+// or paid generations. Only bounded, sanitised OpenAI failure diagnostics are logged.
+// Request headers, credentials, photographs and raw responses are never logged.
 const runtime = (globalThis as unknown as { Deno: { env: { get: (name: string) => string | undefined }; serve: (handler: (request: Request) => Promise<Response>) => void } }).Deno;
 const env = (name: string) => runtime.env.get(name) || '';
 const url = env('SUPABASE_URL'), serviceKey = env('SUPABASE_SERVICE_ROLE_KEY'), anonKey = env('SUPABASE_ANON_KEY');
@@ -29,7 +30,7 @@ const deps: Dependencies = {
 };
 runtime.serve(createAiHandler({
   openaiKey: env('OPENAI_API_KEY'),
-  model: env('AI_IMAGE_MODEL') || 'gpt-image-2',
+  model: env('AI_IMAGE_MODEL') || 'gpt-image-2.5-flare',
   event: env('AI_EVENT_ID') || 'christmas-poker-2026',
   origins: (env('AI_ALLOWED_ORIGINS') || 'https://solodevfailure.github.io').split(',').map(value => value.trim()).filter(Boolean),
 }, deps));

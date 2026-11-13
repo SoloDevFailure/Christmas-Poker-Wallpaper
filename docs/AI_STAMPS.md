@@ -2,15 +2,17 @@
 
 ## Model verification (13 November 2026)
 
-Default: **`gpt-image-2`**, Image API **`POST /v1/images/edits`**, `n=1`, `size=1024x1024`, `quality=low`, `background=transparent`, `output_format=png`. No `input_fidelity`, PNG `output_compression`, automatic retries, partial images or automatic paid background-removal requests. The fixed prompt is in `supabase/functions/ai-stamp/core.ts`; the browser cannot choose the model, prompt, quality, count or event.
+Default: **`gpt-image-2.5-flare`**, Image API **`POST /v1/images/edits`**, `n=1`, `size=1024x1024`, `quality=medium`, `background=transparent`, `output_format=png`. No `input_fidelity`, PNG `output_compression`, automatic retries, partial images or automatic paid background-removal requests. The fixed prompt is in `supabase/functions/ai-stamp/core.ts`; the browser cannot choose the model, prompt, quality, count or event.
 
-The current official edit reference lists this model and transparent PNG output (transparency support is in preview for GPT Image 2). Its published standard rates are **US$2.50 / million text input tokens, US$4 / million image input tokens, US$1 / million cached image input tokens, US$15 / million image output tokens**. Total edit cost includes the reference photograph and prompt; there is no verified fixed per-edit price asserted here. For example, hypothetical usage of 200 text input, 2,000 image input and 1,500 image output tokens would cost US$0.031; this example is arithmetic, not a prediction of actual usage. Actual usage metadata is retained for review.
+The official edit reference explicitly supports transparent PNG output for GPT-Image-2.5 Flare. This replaces `gpt-image-2`, which rejected the live request with HTTP 400, `invalid_value`, parameter `background`: transparent background is not supported for that model on this project.
 
-`gpt-image-1-mini` is cheaper (published low square image output US$0.005 plus input) but is scheduled to shut down **1 December 2026**, before this event. `gpt-image-2` is deprecated with shutdown scheduled **10 February 2027**, covering the December event. A newer Flare model is available at higher token rates. The selected default favors this event's cost and low rendering quality; edit latency/likeness and this project's access have **not** been verified with a paid generation. Set server secret `AI_IMAGE_MODEL` to change models; confirm edit parameters, transparency and pricing before changing it. There is no hidden expensive fallback.
+Published **Standard** rates are **US$5 / million text input tokens, US$8 / million image input tokens and US$30 / million image output tokens**. The previous document incorrectly labelled Batch rates as Standard rates. The official calculator estimates 439 output tokens / **US$0.01317 output-only** for 1024×1024 medium quality. Total edit cost also includes the reference photograph and prompt. Hypothetical usage of 200 text input and 2,000 image input tokens plus that output estimate totals **US$0.03017 per attempt**; input usage is illustrative, not measured. Retries add cost per accepted conversion. Actual usage metadata is retained for review.
+
+`gpt-image-1-mini` and `gpt-image-1.5` retire **1 December 2026**, before this event. Flare supports editing and favors fast everyday image work. This project's access, actual latency, likeness, transparency quality and cost have **not** been verified with a paid generation. Set server secret `AI_IMAGE_MODEL=gpt-image-2.5-flare` when deploying: an existing environment override takes precedence over the source default. There is no hidden expensive fallback. Keep the existing US$0.10 estimated attempt reservation and all quotas/budget safeguards unchanged; this estimate is not a guaranteed billing cap.
 
 Official sources checked:
 
-- https://developers.openai.com/api/docs/models/gpt-image-2
+- https://developers.openai.com/api/docs/models/gpt-image-2.5-flare
 - https://developers.openai.com/api/reference/resources/images/methods/edit
 - https://developers.openai.com/api/docs/pricing
 - https://developers.openai.com/api/docs/deprecations
@@ -24,9 +26,9 @@ Project reference: **`qdzeubaaodqcgighseaf`**. The existing `OPENAI_API_KEY` sta
 2. On an authenticated development machine, from the repository root:
 
    ```powershell
-   npx supabase@latest login
-   npx supabase@latest secrets set AI_IMAGE_MODEL=gpt-image-2 AI_EVENT_ID=christmas-poker-2026 AI_ALLOWED_ORIGINS=https://solodevfailure.github.io --project-ref qdzeubaaodqcgighseaf
-   npx supabase@latest functions deploy ai-stamp --project-ref qdzeubaaodqcgighseaf --no-verify-jwt
+   npx supabase@3.1.0 login
+   npx supabase@3.1.0 secrets set AI_IMAGE_MODEL=gpt-image-2.5-flare AI_EVENT_ID=christmas-poker-2026 AI_ALLOWED_ORIGINS=https://solodevfailure.github.io --remote=qdzeubaaodqcgighseaf --yes
+   npx supabase@3.1.0 functions deploy ai-stamp --remote=qdzeubaaodqcgighseaf --no-verify-jwt --yes
    ```
 
    `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` are Supabase-provided Edge environment values. `OPENAI_API_KEY` is already saved. The CLI command does not read or print it. Add any custom frontend origin to the comma-separated `AI_ALLOWED_ORIGINS`; these are origins without URL paths. Do not add localhost to the production allowlist just to run fixtures: fixtures need no backend.
@@ -95,3 +97,33 @@ With Vite running:
 - `tests/ai-sql.fixture.html`: all four real migrations and PostgreSQL role/grant/quota tests via pinned PGlite from jsDelivr. Exercises membership, atomic admissions, concurrent requests, 5/100 ceilings, failure release, attempt limits, cooldown, idempotency, budget and uncertain outcomes. Runs locally; no Supabase/provider writes. PGlite has one serialized connection, so live multi-connection contention remains a deployment acceptance check.
 - `tests/ai-ui.fixture.html` and `?failure`: mocked success/error/retry, high-resolution normalized input, preserved original, progress, preview actions, explicit selection and transparent bounded stamp. `?visual` leaves the mock flow for responsive inspection. It is clearly labeled mock output, not evidence of OpenAI quality.
 - Existing photo, undo and synthetic-camera fixtures still cover the preserved systems.
+
+## First live failure: diagnostic follow-up
+
+The first deployed v1 request failed after approximately 1.67 seconds with job status `failed`, application error `AI_API_ERROR` and no usage. The handler converts an unclassified OpenAI rejection into its own HTTP 502; that 502 is not evidence that OpenAI returned 502. In v1, upstream 5xx errors map to `UPSTREAM_UNCERTAIN`, 401/403/404 to `AI_CONFIGURATION`, 429 to `AI_RATE_LIMIT`, and recognized safety codes to `AI_MODERATION`. The observed path points toward another early rejection, commonly HTTP 400/422, but cannot establish its precise cause.
+
+The deployed v1 code discarded the upstream error status/body and did not log it. Invocation metadata cannot recover those details retrospectively. Empty Responses logs do not establish that the request was never received: this app calls Images edits, not Responses.
+
+Current official documentation was rechecked for the exact request: multipart `POST https://api.openai.com/v1/images/edits`, one PNG file in `image`, `model=gpt-image-2`, `n=1`, `size=1024x1024`, `quality=low`, `background=transparent`, `output_format=png`. These are documented options; transparency on this model is explicitly preview support. A project-specific preview rejection, an image/request validation error, or another unsupported-value/access condition remains plausible. No model/parameter changes are justified by the generic stored error alone. No OpenAI request was made during this diagnostic work.
+
+### New safe log event
+
+Unsuccessful OpenAI HTTP responses emit one structured `ai_stamp_openai_error` record containing only:
+
+- `job_id`, validated `model`, actual `upstream_status`, and validated OpenAI `openai_request_id` for correlation.
+- Safe identifiers `error_code`, `error_type`, `error_param`.
+- A sanitized `message`, bounded to 512 characters.
+
+No request/response object, photograph, raw body, headers collection, stack trace or credentials are serialized. The sanitizer removes exact configured credentials/session tokens, key/bearer/JWT patterns, image/base64 data, URLs, email addresses, control characters and arbitrary quoted values. Recognized parameter names/settings remain readable. Malformed/non-JSON error bodies get a static message, never their raw content. Logging failures cannot change finalization or client responses. Success responses are not logged.
+
+The client retains the same generic error and retry policy. Authentication, request parameters/model, quota/budget transitions and the one-upstream-request policy are unchanged. No migration, additional secret or frontend change is needed.
+
+### Deployment and inspection
+
+Redeploy only `ai-stamp`, including `index.ts`, `core.ts`, new `diagnostics.ts`, `png.ts` and `deno.json`. Preserve existing secrets and `verify_jwt=false`: the handler continues its own Supabase Auth verification. Existing deployment instructions above apply; include the new relative dependency.
+
+In Supabase → Edge Functions → `ai-stamp` → Logs, include runtime console events and filter for `ai_stamp_openai_error`. The next failed user-requested conversion will reveal the sanitized upstream rejection and OpenAI request ID. This cannot reconstruct the missing v1 response. Do not replay the old job, refund counters or make paid diagnostic generations automatically.
+
+Mocked tests cover 400/401/403/404/422/429/500, missing fields, non-JSON errors, secret/image redaction, log bounds, unchanged client/quota outcomes and a failing logger.
+
+Diagnostic update deployment: `ai-stamp` version 2 is ACTIVE and its deployed files match the tested repository files. An unauthenticated POST returned HTTP 401 / AUTH_REQUIRED. The jobs table still contained only the original failed job afterward. No OpenAI requests, new conversion jobs, quota resets, migrations or frontend deployments were performed during this follow-up.

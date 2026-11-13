@@ -1,3 +1,4 @@
+import { openAiDiagnostic, type OpenAiDiagnostic } from './diagnostics.ts';
 import { assertStickerTransparency, decodePng, MAX_AI_UPLOAD } from './png.ts';
 export const CARTOON_PROMPT = `Identify the main subject of the photograph, whether a person, group, animal, vehicle, drink or other object.
 
@@ -14,6 +15,7 @@ export type Dependencies = {
   reserve: (args: { user: string; session: string; request: string; hash: string; model: string; event: string }) => Promise<{ status: string; remaining?: number }>;
   finish: (id: string, status: 'succeeded' | 'failed' | 'unknown', code?: string, usage?: unknown) => Promise<boolean>;
   fetch: typeof fetch;
+  logDiagnostic?: (entry: OpenAiDiagnostic) => void;
 };
 export class AiError extends Error {
   constructor(public code: string, message: string, public status = 400, public retryable = false) { super(message); }
@@ -89,7 +91,7 @@ export function createAiHandler(config: Config, deps: Dependencies) {
       const edit = new FormData();
       edit.set('image', new Blob([bytes], { type: 'image/png' }), 'photo.png');
       edit.set('model', config.model); edit.set('prompt', CARTOON_PROMPT);
-      edit.set('n', '1'); edit.set('size', '1024x1024'); edit.set('quality', 'low');
+      edit.set('n', '1'); edit.set('size', '1024x1024'); edit.set('quality', 'medium');
       edit.set('background', 'transparent'); edit.set('output_format', 'png');
       // Exactly one upstream request. No SDK retries, quality escalation, streaming
       // partial images, user-selected model/prompt, or follow-up paid cleanup.
@@ -97,11 +99,22 @@ export function createAiHandler(config: Config, deps: Dependencies) {
       let response: Response;
       try { response = await deps.fetch('https://api.openai.com/v1/images/edits', { method: 'POST', headers: { Authorization: `Bearer ${config.openaiKey}` }, body: edit, signal: AbortSignal.timeout(110000) }); }
       catch { throw new AiError('UPSTREAM_UNCERTAIN', 'The AI request timed out or lost its connection. Its outcome needs review; use the original photo for now.', 504, false); }
-      const resultBytes = await readLimited(response.body, 16 * 1024 * 1024, 10000);
-      let result: { data?: { b64_json?: string }[]; usage?: unknown; error?: { code?: string } };
-      try { result = JSON.parse(new TextDecoder().decode(resultBytes)); } catch { throw new AiError('UPSTREAM_UNCERTAIN', 'The AI returned an unreadable response. Use the original photo for now.', 502); }
+      // Log only selected, sanitised fields. Logging must not alter error mapping,
+      // quota finalisation or the one-request/no-retry policy.
+      const logFailure = (error: unknown) => {
+        try {
+          const entry = openAiDiagnostic({ job: request, model: config.model, status: response.status, requestId: response.headers.get('x-request-id') }, error, [config.openaiKey, authorization.slice(7)]);
+          if (deps.logDiagnostic) deps.logDiagnostic(entry); else console.error(JSON.stringify(entry));
+        } catch { /* Diagnostics must never interfere with request handling. */ }
+      };
+      let resultBytes: Uint8Array;
+      try { resultBytes = await readLimited(response.body, 16 * 1024 * 1024, 10000); }
+      catch (e) { if (!response.ok) logFailure({ type: 'unreadable_response', message: 'OpenAI response body could not be read.' }); throw e; }
+      let result: { data?: { b64_json?: string }[]; usage?: unknown; error?: { code?: string; type?: string; message?: string; param?: string } };
+      try { result = JSON.parse(new TextDecoder().decode(resultBytes)); } catch { if (!response.ok) logFailure({ type: 'unreadable_response', message: 'OpenAI returned a non-JSON error response; raw body omitted.' }); throw new AiError('UPSTREAM_UNCERTAIN', 'The AI returned an unreadable response. Use the original photo for now.', 502); }
       outcome = response.status >= 500 ? 'unknown' : 'failed';
       if (!response.ok) {
+        logFailure(result?.error);
         if (response.status >= 500) throw new AiError('UPSTREAM_UNCERTAIN', 'The AI service could not confirm the result. Its outcome needs review; use the original photo for now.', 502, false);
         if (response.status === 429) throw new AiError('AI_RATE_LIMIT', 'AI is busy or its account limit was reached. Please try later.', 429, true);
         if (/moderation|safety|content_policy/i.test(result.error?.code || '')) throw new AiError('AI_MODERATION', 'This photo could not be converted under the image safety rules. You can use the original photo or choose another.', 422, true);
