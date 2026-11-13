@@ -56,4 +56,8 @@
 .camera-mode:has(.phone-undo) .tracking-debug-panel{bottom:calc(max(12px,env(safe-area-inset-bottom)) + 124px)}
 @media(max-height:420px){.photo-preparation{gap:8px;padding:10px}.photo-preview{height:25dvh}.photo-preparation small{font-size:11px}}
 .manual-mode:has(.phone-undo){padding-bottom:170px}
+.ai-progress{margin:0;color:#e4c77f;font-size:13px;line-height:1.4}
+.has-cartoon .photo-options{display:grid;grid-template-columns:1fr 1fr}
+.has-cartoon .photo-options button{min-width:0;font-size:13px;padding:10px 6px}
+.has-cartoon .photo-options button:first-child{grid-column:1/-1}
 @media(orientation:portrait){.camera-mode:has(.phone-undo) .reaim{bottom:calc(max(12px,env(safe-area-inset-bottom)) + 124px)}}

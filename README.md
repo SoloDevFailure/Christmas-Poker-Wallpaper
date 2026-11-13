@@ -1,5 +1,7 @@
 # CHRISTMAS POKER 2026 — Version 0.2
 
+**AI cartoons:** [Model/pricing verification, secure quotas, migration and Edge Function deployment](docs/AI_STAMPS.md). AI requests run only on the authenticated backend; `OPENAI_API_KEY` must remain in Supabase secrets.
+
 **Photo/undo update:** [Photo limits, secure undo, required migration and deployment checks](docs/PHOTO_UNDO.md). Apply `202611130001_individual_undo.sql` before deploying this controller. Earlier “no new migration” notes below describe previous tracking-only changes.
 
 React + TypeScript + Vite prototype with a PC wallpaper, phone camera controller, custom transparent text/emoji PNGs, eight-marker ArUco tracking in a worker, direct sticker gestures and a perspective-aware camera overlay, private Supabase previews, persistent ordered stamps, owner-only reset and PNG export.

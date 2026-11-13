@@ -11,6 +11,7 @@ import { stampSource } from './art';
 import { W, H, type Point } from './geometry';
 import { type Placement, type Stamp, stampDimensions } from './types';
 type Props = {
+    sessionId?: string;
     placement: Placement;
     stamps: Stamp[];
     camera: boolean;
@@ -94,7 +95,7 @@ export default function PhoneController(p: Props) {
     </header>
     <input ref={cameraInput} className="photo-file-input" type="file" accept={PHOTO_ACCEPT} capture="environment" aria-label="Take a photo" onChange={e => { const file = e.target.files?.[0]; if (file) setPhoto(file); e.target.value = ''; }}/>
     <input ref={photoInput} className="photo-file-input" type="file" accept={PHOTO_ACCEPT} aria-label="Import photo file" onChange={e => { const file = e.target.files?.[0]; if (file) setPhoto(file); e.target.value = ''; }}/>
-    {photo && <PhotoPreparation file={photo} onCancel={() => setPhoto(null)} onFinish={asset => { p.onChange({ ...p.placement, ...asset, stamp_type: 'custom' }); setPhoto(null); }}/>}
+    {photo && <PhotoPreparation sessionId={p.sessionId} file={photo} onCancel={() => setPhoto(null)} onFinish={asset => { p.onChange({ ...p.placement, ...asset, stamp_type: 'custom' }); setPhoto(null); }}/>}
     {emojiOpen && <EmojiPicker onClose={() => setEmojiOpen(false)} onSelect={unicode => void selectEmoji(unicode)}/>}
     {drawingOpen&&<DrawingEditor onCancel={()=>setDrawingOpen(false)} onFinish={asset=>{p.onChange({...p.placement,...asset,stamp_type:'custom'});setDrawingOpen(false);}}/>}
     {!p.camera && <div className="manual-content"><h1>Manual placement</h1><div className="manual" onPointerDown={manualDown} onPointerMove={manualMove} onPointerUp={manualUp} onPointerCancel={manualUp} onLostPointerCapture={manualUp}><svg viewBox={'0 0 ' + W + ' ' + H}><rect width={W} height={H} fill="#06281f"/>{p.stamps.map(s => image(s, s.id))}{image(p.placement, 'selected', true)}</svg><span>Tap or drag to place</span></div><label>Size <input aria-label="Manual sticker size" type="range" min="32" max="600" value={p.placement.scale} onChange={e => p.onChange({ ...p.placement, scale: +e.target.value })}/><output>{Math.round(p.placement.scale)}</output></label><label>Rotation <input aria-label="Manual sticker rotation" type="range" min="-180" max="180" value={p.placement.rotation} onChange={e => p.onChange({ ...p.placement, rotation: +e.target.value })}/><output>{Math.round(p.placement.rotation)}°</output></label><button onClick={() => mode('camera-stamp')}>Back to camera</button></div>}

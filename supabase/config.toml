@@ -1,0 +1,6 @@
+project_id = "Christmas-Poker-Wallpaper"
+
+[functions.ai-stamp]
+# Auth is verified in the handler through Supabase Auth /user, including modern
+# JWT signing keys. This does NOT make the handler public or trust decoded JWTs.
+verify_jwt = false
