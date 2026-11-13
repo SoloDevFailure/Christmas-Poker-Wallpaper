@@ -9,13 +9,14 @@ function request(png: Uint8Array = pngFixture(), token = 'valid-token', id = req
   const form = new FormData(); form.set('session_id', session); form.set('request_id', id); form.set('image', new Blob([Uint8Array.from(png)], { type: 'image/png' }), 'photo.png');
   return new Request('https://test.invalid/ai-stamp', { method: 'POST', headers: token ? { Authorization: `Bearer ${token}`, Origin: 'https://event.invalid' } : {}, body: form });
 }
-function harness(options: { rejection?: string; upstreamStatus?: number; upstreamCode?: string; upstreamMessage?: string; upstreamType?: string; upstreamParam?: string; upstreamRaw?: string; loggerFails?: boolean; output?: Buffer; networkError?: boolean; authenticated?: boolean; finishFails?: boolean } = {}) {
+function harness(options: { quotaCode?: string; retryAfterSeconds?: number; rejection?: string; upstreamStatus?: number; upstreamCode?: string; upstreamMessage?: string; upstreamType?: string; upstreamParam?: string; upstreamRaw?: string; loggerFails?: boolean; output?: Buffer; networkError?: boolean; authenticated?: boolean; finishFails?: boolean } = {}) {
   const logs: OpenAiDiagnostic[] = [];
   let calls = 0, reservations = 0; const finished: { status: string; code?: string }[] = [], seen = new Set<string>();
   const deps: Dependencies = {
+    allowance: async () => options.quotaCode ? { status: 'blocked', code: options.quotaCode, retry_after_seconds: options.retryAfterSeconds } : { status: 'ready', remaining: 15, attempts_remaining: 40 },
     logDiagnostic: entry => { if (options.loggerFails) throw Error('logger unavailable'); logs.push(entry); },
     authenticate: async () => options.authenticated === false ? null : 'authenticated-user',
-    reserve: async args => { reservations++; assert.equal(args.user, 'authenticated-user'); assert.match(args.hash, /^[a-f0-9]{64}$/);
+    reserve: async args => { reservations++; if (options.quotaCode) return { status: 'blocked', code: options.quotaCode, retry_after_seconds: options.retryAfterSeconds };  assert.equal(args.user, 'authenticated-user'); assert.match(args.hash, /^[a-f0-9]{64}$/);
       if (options.rejection) throw Error(options.rejection);
       if (seen.has(args.request)) return { status: 'running' }; seen.add(args.request); return { status: 'admitted', remaining: 4 };
     },
@@ -153,4 +154,30 @@ test('failed HTTP responses are logged across status classes and logger failure 
   const h = harness({ upstreamStatus: 400, loggerFails: true }); const response = await h.handler(request());
   assert.equal((await response.json()).code, 'AI_API_ERROR'); assert.equal(h.stats().finished[0].status, 'failed');
   const success = harness(); assert.equal((await success.handler(request())).status, 200); assert.deepEqual(success.stats().logs, []);
+});
+
+test('rolling limit responses include a safe recovery delay without dispatching paid work', async () => {
+  for (const code of ['AI_USER_LIMIT', 'AI_USER_ATTEMPT_LIMIT', 'AI_COOLDOWN']) {
+    const h = harness({ quotaCode: code, retryAfterSeconds: 123 });
+    const response = await h.handler(request());
+    assert.equal(response.status, 429);
+    const body = await response.json();
+    assert.equal(body.code, code); assert.equal(body.retry_after_seconds, 123);
+    assert.equal(h.stats().calls, 0); assert.deepEqual(h.stats().finished, []);
+  }
+});
+test('allowance GET authenticates and validates membership via RPC without reserving or generating', async () => {
+  const url = 'https://test.invalid/ai-stamp?session_id=' + session;
+  const h = harness();
+  const response = await h.handler(new Request(url, { headers: { Authorization: 'Bearer valid-token' } }));
+  assert.equal(response.status, 200); assert.equal((await response.json()).available, true);
+  assert.equal(h.stats().calls, 0); assert.equal(h.stats().reservations, 0);
+  assert.equal((await h.handler(new Request(url))).status, 401);
+  const expired = harness({ authenticated: false });
+  assert.equal((await expired.handler(new Request(url, { headers: { Authorization: 'Bearer expired' } }))).status, 401);
+  assert.equal((await h.handler(new Request('https://test.invalid/ai-stamp?session_id=bad', { headers: { Authorization: 'Bearer valid-token' } }))).status, 400);
+  const limited = harness({ quotaCode: 'AI_USER_ATTEMPT_LIMIT', retryAfterSeconds: 60 });
+  const denied = await limited.handler(new Request(url, { headers: { Authorization: 'Bearer valid-token' } }));
+  assert.equal(denied.status, 429); assert.equal((await denied.json()).retry_after_seconds, 60);
+  assert.equal(limited.stats().reservations, 0); assert.equal(limited.stats().calls, 0);
 });

@@ -1,4 +1,4 @@
-import { createAiHandler, type Dependencies } from './core.ts';
+import { createAiHandler, type Allowance, type Dependencies } from './core.ts';
 
 // The only runtime-specific entry point. Everything else is tested without keys
 // or paid generations. Only bounded, sanitised OpenAI failure diagnostics are logged.
@@ -16,6 +16,7 @@ async function rpc(name: string, args: unknown): Promise<unknown> {
   return data;
 }
 const deps: Dependencies = {
+  allowance: async args => await rpc('ai_stamp_allowance', { p_event: args.event, p_user: args.user, p_session: args.session }) as Allowance,
   authenticate: async token => {
     if (!url || !anonKey || !serviceKey) return null;
     const response = await fetch(`${url}/auth/v1/user`, { headers: { apikey: anonKey, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10000) });
@@ -24,7 +25,7 @@ const deps: Dependencies = {
   },
   reserve: async args => await rpc('reserve_ai_stamp', {
     p_event: args.event, p_user: args.user, p_session: args.session, p_request: args.request, p_hash: args.hash, p_model: args.model,
-  }) as { status: string; remaining?: number },
+  }) as Allowance,
   finish: async (id, status, code, usage) => await rpc('finish_ai_stamp', { p_request: id, p_status: status, p_error: code ?? null, p_usage: usage ?? null }) === true,
   fetch,
 };

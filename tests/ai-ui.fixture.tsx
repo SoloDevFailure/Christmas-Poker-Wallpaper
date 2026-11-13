@@ -11,16 +11,18 @@ const blob = async () => await new Promise<Blob>(resolve => canvas.toBlob(value 
 const original = new File([await blob()], 'original.png', { type: 'image/png' });
 canvas.width = 1024; canvas.height = 1024; ctx.fillStyle = '#ebc25f'; ctx.fillRect(230, 230, 564, 564); ctx.fillStyle = '#151d19'; ctx.fillRect(350, 380, 70, 70); ctx.fillRect(600, 380, 70, 70); ctx.fillRect(350, 650, 320, 40);
 const cartoon = await blob();
+let allowanceChecks = 0;
 let calls = 0, selected: CustomAsset | null = null;
 const ensure = (value: unknown, message: string) => { if (!value) throw Error(message); };
 function Harness() {
   const [open, setOpen] = useState(true), [asset, setAsset] = useState<CustomAsset | null>(null);
-  return <><p>MOCK AI fixture — no paid API calls</p>{open && <PhotoPreparation file={original} sessionId="11111111-1111-4111-8111-111111111111" onCancel={() => setOpen(false)} onFinish={value => { selected = value; setAsset(value); setOpen(false); }} convert={async upload => {
+  return <><p>MOCK AI fixture — no paid API calls</p>{open && <PhotoPreparation file={original} sessionId="11111111-1111-4111-8111-111111111111" onCancel={() => setOpen(false)} onFinish={value => { selected = value; setAsset(value); setOpen(false); }} allowance={async () => { allowanceChecks++; return { available: true }; }} convert={async upload => {
     calls++;
     const decoded = await decodePhoto(upload);
     try { ensure(decoded.image.naturalWidth === 1536 && decoded.image.naturalHeight === 768, 'AI received stamp-size or distorted input'); }
     finally { decoded.dispose(); }
     await new Promise(resolve => setTimeout(resolve, 300));
+    if (location.search.includes('quota') && calls === 1) throw new AiConversionError('Your attempt allowance for the last 30 minutes is used.', false, 'test', false, 1);
     if (location.search.includes('failure') && calls === 1) throw new AiConversionError('Mock rate limit — your original photo is safe.', true, 'test');
     return cartoon;
   }}/ >}{asset && <><p>Prepared for placement; nothing stamped.</p><img alt="Prepared stamp" src={asset.image_data}/></>}</>;
@@ -36,6 +38,16 @@ async function check() {
     button('Convert to AI Stamp').click();
     await until(() => document.querySelector('.ai-progress'));
     ensure(!selected, 'Generation automatically selected/stamped artwork');
+    if (location.search.includes('quota')) {
+      await until(() => document.querySelector('[role=alert]'));
+      ensure(button('Retry').disabled, 'Retry enabled during rolling quota');
+      ensure(!button('Use Original Photo').disabled, 'Quota disabled original photo');
+      ensure(document.querySelector('.ai-progress'), 'Refill countdown missing');
+      await until(() => !button('Retry').disabled);
+      ensure(allowanceChecks > 0 && calls === 1, 'Refill dispatched a generation or skipped server check');
+      ensure(!selected, 'Refill automatically selected artwork');
+      button('Retry').click();
+    }
     if (location.search.includes('failure')) {
       await until(() => document.querySelector('[role=alert]'));
       ensure(button('Use Original Photo') && !button('Use Original Photo').disabled, 'Error discarded original');
@@ -49,6 +61,6 @@ async function check() {
     ensure(selected!.image_width === selected!.image_height, 'AI aspect ratio changed');
     const image = new Image(); image.src = selected!.image_data; await image.decode(); canvas.width = image.width; canvas.height = image.height;
     ctx.drawImage(image, 0, 0); ensure(ctx.getImageData(0, 0, 1, 1).data[3] === 0, 'Prepared AI stamp lost transparency');
-    out.textContent = 'PASS: full-resolution normalized original, loading, retry/error recovery, original retained, generated preview, three actions, explicit Use AI Stamp, bounded transparent PNG and no automatic stamping.';
+    out.textContent = 'PASS: quota countdown and automatic no-generation recovery (quota mode), full-resolution normalized original, loading, retry/error recovery, original retained, generated preview, three actions, explicit Use AI Stamp, bounded transparent PNG and no automatic stamping.';
   } catch (e) { out.textContent = 'FAIL: ' + String(e); console.error(e); }
 }

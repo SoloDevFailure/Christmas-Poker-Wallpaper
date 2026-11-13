@@ -8,7 +8,7 @@ The official edit reference explicitly supports transparent PNG output for GPT-I
 
 Published **Standard** rates are **US$5 / million text input tokens, US$8 / million image input tokens and US$30 / million image output tokens**. The previous document incorrectly labelled Batch rates as Standard rates. The official calculator estimates 439 output tokens / **US$0.01317 output-only** for 1024×1024 medium quality. Total edit cost also includes the reference photograph and prompt. Hypothetical usage of 200 text input and 2,000 image input tokens plus that output estimate totals **US$0.03017 per attempt**; input usage is illustrative, not measured. Retries add cost per accepted conversion. Actual usage metadata is retained for review.
 
-`gpt-image-1-mini` and `gpt-image-1.5` retire **1 December 2026**, before this event. Flare supports editing and favors fast everyday image work. This project's access, actual latency, likeness, transparency quality and cost have **not** been verified with a paid generation. Set server secret `AI_IMAGE_MODEL=gpt-image-2.5-flare` when deploying: an existing environment override takes precedence over the source default. There is no hidden expensive fallback. Keep the existing US$0.10 estimated attempt reservation and all quotas/budget safeguards unchanged; this estimate is not a guaranteed billing cap.
+`gpt-image-1-mini` and `gpt-image-1.5` retire **1 December 2026**, before this event. Flare supports editing and favors fast everyday image work. This project's access, actual latency, likeness, transparency quality and cost have **not** been verified with a paid generation. Set server secret `AI_IMAGE_MODEL=gpt-image-2.5-flare` when deploying: an existing environment override takes precedence over the source default. There is no hidden expensive fallback. New attempts reserve an estimated US$0.05; this is not a guaranteed billing cap. Two reported successful medium-quality conversions cost about US$0.05 combined; the new reservation is twice that observed per-success cost, not a proven worst-case price.
 
 Official sources checked:
 
@@ -22,7 +22,7 @@ Official sources checked:
 
 Project reference: **`qdzeubaaodqcgighseaf`**. The existing `OPENAI_API_KEY` stays in Supabase secrets. Do not retrieve it, copy it into the repository, put it in a `VITE_` variable or paste it into frontend code.
 
-1. Run the entire `supabase/migrations/202611130002_ai_stamps.sql` once in this project's SQL Editor, after the three previous migrations. It creates private quota/history tables and service-role-only reservation/completion functions. The event starts **disabled**. If earlier migrations were run manually in the SQL Editor, do not blindly replay all migrations using `db push`; use your actual remote migration history.
+1. Run the entire `supabase/migrations/202611130002_ai_stamps.sql` once in this project's SQL Editor, after the three previous migrations. It creates private quota/history tables and service-role-only reservation/completion functions. Then apply `supabase/migrations/20261113123928_ai_stamp_rolling_quotas.sql` once, **before deploying the updated Edge Function**. This additive migration changes constraints/defaults and reservation/status functions; it keeps all jobs and prior committed debits. The event starts **disabled**. If earlier migrations were run manually in the SQL Editor, do not blindly replay all migrations using `db push`; use your actual remote migration history.
 2. On an authenticated development machine, from the repository root:
 
    ```powershell
@@ -39,14 +39,23 @@ Project reference: **`qdzeubaaodqcgighseaf`**. The existing `OPENAI_API_KEY` sta
    ```sql
    update public.ai_stamp_events
    set enabled=true,
-       success_limit=100, user_success_limit=5,
-       attempt_limit=150, user_attempt_limit=10,
+       success_limit=150, user_success_limit=15,
+       attempt_limit=500, user_attempt_limit=40,
        active_limit=3, cooldown_seconds=30,
-       budget_usd=10.00, attempt_reserve_usd=0.10
+       budget_usd=4.00, attempt_reserve_usd=0.05
    where id='christmas-poker-2026';
    ```
 
-   These are configurable admission safeguards. Every admitted attempt permanently debits the configured **estimated** US$0.10 reservation, including failed requests, so the default US$10 safeguard admits at most 100 attempts. That figure is **not a verified per-image price or guaranteed OpenAI billing cap**. Actual charges can differ, and requests outside this function are outside this counter. Changing the model/quality/rates requires reconsidering the reservation. Monitor provider usage. Set `enabled=false` to stop new admissions.
+   These are configurable admission safeguards. Each admitted attempt permanently debits the **estimated** US$0.05 reservation, including failures. Prior US$0.10 debits stay unchanged. The US$4 event safeguard therefore admits at most 80 new attempts from a zero balance, fewer with existing debits; it can stop the event before 150 successes. It is **not a guaranteed OpenAI billing cap**. Actual costs may differ and outside requests are not covered. Neither the budget, event generation limit nor 500-event-attempt backstop rolls over. One active job per user, the existing global active limit and 30-second short cooldown remain.
+
+   Increase the safeguard when more prepaid API credit is added, without clearing history or debits:
+
+   ```sql
+   update public.ai_stamp_events set budget_usd=8.00 where id='christmas-poker-2026';
+   ```
+
+   The application does not read prepaid balance or enable automatic credit purchases. Monitor actual provider usage; set `enabled=false` to stop admissions.
+
 5. Deploy the frontend through the existing Pages workflow and refresh the phones. The API key never enters that build. No Storage bucket or public photo URL is required.
 6. A live paid test needs explicit approval after the model and estimated spend have been reported. No paid calls were made during implementation. Organization verification, model access, safety behavior, actual latency/price/likeness and physical phone handoff remain live acceptance checks. API errors do not trigger a different model or automatic retry.
 
@@ -54,7 +63,11 @@ Deployment documentation: https://supabase.com/docs/guides/functions/deploy and 
 
 ## Limits, concurrency and failure recovery
 
-`reserve_ai_stamp` locks the event row before checking/inserting a job and debiting its estimate. Running/reserved jobs count toward the **five per authenticated user / 100 per event** ceilings, preventing concurrent successful jobs from overshooting. All active wallpaper sessions use the same server-selected event. A partial unique index permits only one running/uncertain job per user across events. There is also a global concurrent-job limit, a cooldown and lifetime failed-attempt limits. Anonymous identities are browser profiles, not verified people; clearing browser storage can create a new identity, while the event-wide caps still apply.
+`reserve_ai_stamp` locks the event row before checking/inserting a job and debiting its estimate; completion takes the same lock. Per-user limits are **40 admitted attempts / 15 completed successes in a rolling 30-minute window**, scoped to the server-selected event across wallpaper sessions. Attempts use `started_at`; successes use `finished_at`; exact boundary timestamps are excluded (`> server_now - interval '30 minutes'`). Failed requests consume an attempt, not a success. Rejected admissions do not contact OpenAI or create a job. Running/uncertain jobs never age out of the active lock. Cumulative running/uncertain/successful event slots are capped at **150**. All timestamps come from PostgreSQL, not the browser; no scheduled resets or history deletions are needed.
+
+`ai_stamp_allowance` is a service-role-only, membership-checked read RPC. It reports remaining allowance and the time when enough entries leave **both** windows, also respecting the short cooldown. Event/budget/uncertain blocks have no misleading reset timer. Authenticated `GET /functions/v1/ai-stamp?session_id=<UUID>` exposes this status without a photograph, reservation or OpenAI request. Denied rolling requests return a reason and `retry_after_seconds` calculated using server time. The phone disables Retry, displays the approximate wait, and rechecks status when due or when the page becomes visible. Transient status-check failures retry only this free GET, every five seconds. Replenishment re-enables the button; it never dispatches generation. Original photo and any earlier cartoon stay available.
+
+A partial unique index permits only one running/uncertain job per user across events. Anonymous identities are browser profiles, not verified people; clearing storage can create a new identity, while cumulative event caps still apply.
 
 A caller supplies a request UUID but never an owner ID. The Edge Function derives the owner from verified Supabase Auth. Request UUIDs bind to the user, event, session and SHA-256 hash of the normalized photograph. Reusing an ID never causes another upstream edit, even after failure; changing its image/identity is rejected. A deliberate Retry creates a new bounded attempt. **Every successful cartoon, including a successful Retry, uses one success allowance even if it is not stamped.**
 
@@ -77,7 +90,7 @@ Server upload limit: **8 MiB**, bounded while streaming even without Content-Len
 
 The server requests actual alpha output. It decodes returned PNG pixels, requiring significant transparent area, visible foreground and a predominantly clear border. An opaque checkerboard, opaque background, empty image or token transparent pixel is rejected; a checkerboard is never substituted for alpha. This is a decoded-alpha/background check, not semantic vision proof that every part of a generated subject is correct. No generation is represented as reliably good without live acceptance. There is no paid automatic background-removal chain: use Original or explicitly Retry when validation fails.
 
-Phone flow: Convert → progress → cartoon preview → **Retry / Use AI Stamp / Use Original Photo**. Retry preserves the earlier usable cartoon while a replacement is attempted. Errors preserve the original. Uncertain/budget/exhausted-limit errors disable further retries in that screen while leaving existing art/original usable. No automatic selection or stamping occurs.
+Phone flow: Convert → progress → cartoon preview → **Retry / Use AI Stamp / Use Original Photo**. Retry preserves the earlier usable cartoon while a replacement is attempted. Errors preserve the original. Uncertain/budget errors disable further retries in that screen; rolling quota errors disable Retry until an authenticated status check confirms recovery while leaving existing art/original usable. No automatic selection or stamping occurs.
 
 Use AI Stamp calls existing `preparePhoto`: the result fits **512×256**, preserves aspect/alpha and progressively resizes to **65,536 data-URL characters**. Camera preview, stored wallpaper and exports all reuse that same selected PNG. ArUco code, gestures, original-photo preparation, drawing, undo, realtime and export implementations are unchanged.
 
@@ -94,8 +107,8 @@ The Edge entry point has a separate TypeScript config; `npm test` imports/tests 
 
 With Vite running:
 
-- `tests/ai-sql.fixture.html`: all four real migrations and PostgreSQL role/grant/quota tests via pinned PGlite from jsDelivr. Exercises membership, atomic admissions, concurrent requests, 5/100 ceilings, failure release, attempt limits, cooldown, idempotency, budget and uncertain outcomes. Runs locally; no Supabase/provider writes. PGlite has one serialized connection, so live multi-connection contention remains a deployment acceptance check.
-- `tests/ai-ui.fixture.html` and `?failure`: mocked success/error/retry, high-resolution normalized input, preserved original, progress, preview actions, explicit selection and transparent bounded stamp. `?visual` leaves the mock flow for responsive inspection. It is clearly labeled mock output, not evidence of OpenAI quality.
+- `tests/ai-sql.fixture.html`: all five real migrations and PostgreSQL role/grant/quota tests via pinned PGlite from jsDelivr. Exercises membership, atomic admissions, concurrent requests, rolling 40/15 and cumulative 150 ceilings, failure release, attempt limits, cooldown, idempotency, budget and uncertain outcomes. Runs locally; no Supabase/provider writes. PGlite has one serialized connection, so live multi-connection contention remains a deployment acceptance check.
+- `tests/ai-ui.fixture.html` and `?failure` / `?quota`: mocked success/error/retry, timed quota recovery without auto-generation, high-resolution normalized input, preserved original, progress, preview actions, explicit selection and transparent bounded stamp. `?visual` leaves the mock flow for responsive inspection. It is clearly labeled mock output, not evidence of OpenAI quality.
 - Existing photo, undo and synthetic-camera fixtures still cover the preserved systems.
 
 ## First live failure: diagnostic follow-up
@@ -116,7 +129,7 @@ Unsuccessful OpenAI HTTP responses emit one structured `ai_stamp_openai_error` r
 
 No request/response object, photograph, raw body, headers collection, stack trace or credentials are serialized. The sanitizer removes exact configured credentials/session tokens, key/bearer/JWT patterns, image/base64 data, URLs, email addresses, control characters and arbitrary quoted values. Recognized parameter names/settings remain readable. Malformed/non-JSON error bodies get a static message, never their raw content. Logging failures cannot change finalization or client responses. Success responses are not logged.
 
-The client retains the same generic error and retry policy. Authentication, request parameters/model, quota/budget transitions and the one-upstream-request policy are unchanged. No migration, additional secret or frontend change is needed.
+Diagnostics remain unchanged by the rolling-quota update. Model, image parameters, prompt, authentication and the one-upstream-request policy remain intact. The rolling-quota migration and frontend update described above are required; no new secrets are needed.
 
 ### Deployment and inspection
 
@@ -126,4 +139,12 @@ In Supabase → Edge Functions → `ai-stamp` → Logs, include runtime console 
 
 Mocked tests cover 400/401/403/404/422/429/500, missing fields, non-JSON errors, secret/image redaction, log bounds, unchanged client/quota outcomes and a failing logger.
 
-Diagnostic update deployment: `ai-stamp` version 2 is ACTIVE and its deployed files match the tested repository files. An unauthenticated POST returned HTTP 401 / AUTH_REQUIRED. The jobs table still contained only the original failed job afterward. No OpenAI requests, new conversion jobs, quota resets, migrations or frontend deployments were performed during this follow-up.
+The earlier diagnostic-only update made no paid OpenAI requests. Deployment status for the rolling-quota update is verified separately after applying its migration and deploying the Edge Function.
+
+## Rolling-quota deployment verification (13 November 2026)
+
+The additive `20261113123928_ai_stamp_rolling_quotas.sql` migration was applied to `qdzeubaaodqcgighseaf` and its deployed settings/RPC privileges were queried: 40 attempts and 15 successes per user per rolling 30 minutes; 150 cumulative event slots; US$4 budget; US$0.05 new-attempt reservation; the existing active limit of one and 30-second cooldown retained. All five pre-existing jobs and the US$0.50 estimated committed balance survived unchanged. Temporary live-test events/jobs/session/users were removed after testing; no original history was deleted.
+
+`ai-stamp` version **6** is ACTIVE, all uploaded source files match, and an unauthenticated allowance GET returns 401. No new secrets or model/quality changes are required. Deploy the frontend through the existing Pages workflow and refresh existing phones to receive countdown/recovery UI.
+
+Verification: 163 unit tests, both TypeScript configurations and production build passed; 30 isolated PostgreSQL assertions passed; the mock `?quota` UI fixture verified disabled Retry, usable original photo, timed status refresh and no automatic generation. Live separate-connection overlapping transactions admitted exactly one request at each one-active-user, final budget reservation and final event-slot boundary. These database-only fixtures did not contact OpenAI and did not debit the real event. No paid generations were made.

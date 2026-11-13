@@ -10,15 +10,17 @@ Remove the entire background and produce genuine transparency.
 
 Keep the complete subject visible. Do not add unrelated objects, scenery or text.`;
 export type Config = { model: string; event: string; origins: string[]; openaiKey: string };
+export type Allowance = { status: string; code?: string; remaining?: number; attempts_remaining?: number; retry_after_seconds?: number };
 export type Dependencies = {
+  allowance: (args: { user: string; session: string; event: string }) => Promise<Allowance>;
   authenticate: (token: string) => Promise<string | null>;
-  reserve: (args: { user: string; session: string; request: string; hash: string; model: string; event: string }) => Promise<{ status: string; remaining?: number }>;
+  reserve: (args: { user: string; session: string; request: string; hash: string; model: string; event: string }) => Promise<Allowance>;
   finish: (id: string, status: 'succeeded' | 'failed' | 'unknown', code?: string, usage?: unknown) => Promise<boolean>;
   fetch: typeof fetch;
   logDiagnostic?: (entry: OpenAiDiagnostic) => void;
 };
 export class AiError extends Error {
-  constructor(public code: string, message: string, public status = 400, public retryable = false) { super(message); }
+  constructor(public code: string, message: string, public status = 400, public retryable = false, public retryAfterSeconds?: number) { super(message); }
 }
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const quotaErrors: Record<string, [string, number, boolean]> = {
@@ -26,16 +28,18 @@ const quotaErrors: Record<string, [string, number, boolean]> = {
   AI_EVENT_DISABLED: ['AI stamps are not enabled for this event yet.', 503, false],
   AI_USER_ACTIVE: ['Your previous conversion is still running or awaiting review. Use the original photo for now.', 409, false],
   AI_EVENT_BUSY: ['Other photos are being converted. Please try again shortly.', 429, true],
-  AI_USER_LIMIT: ['You have used your five AI conversions.', 429, false],
+  AI_USER_LIMIT: ['Your successful-generation allowance for the last 30 minutes is used. It replenishes automatically.', 429, false],
   AI_EVENT_LIMIT: ['The event has reached its AI conversion limit.', 429, false],
+  AI_USER_ATTEMPT_LIMIT: ['Your AI attempt allowance for the last 30 minutes is used. Failed conversions also count as attempts.', 429, false],
+  AI_EVENT_ATTEMPT_LIMIT: ['The event AI attempt limit has been reached. Use the original photo.', 429, false],
   AI_ATTEMPT_LIMIT: ['The AI attempt limit has been reached. Use the original photo.', 429, false],
   AI_COOLDOWN: ['Please wait a little before another AI attempt.', 429, true],
   AI_BUDGET_LIMIT: ['The event AI spending safeguard has stopped new conversions.', 429, false],
   AI_REQUEST_CONFLICT: ['This conversion request ID was already used.', 409, false],
 };
-export function quotaError(message: string): AiError {
+export function quotaError(message: string, retryAfterSeconds?: number): AiError {
   const code = Object.keys(quotaErrors).find(key => message.includes(key));
-  return code ? new AiError(code, ...quotaErrors[code]) : new AiError('AI_UNAVAILABLE', 'AI conversion is unavailable. Please try later.', 503, false);
+  return code ? new AiError(code, ...quotaErrors[code], retryAfterSeconds) : new AiError('AI_UNAVAILABLE', 'AI conversion is unavailable. Please try later.', 503, false);
 }
 export async function readLimited(body: ReadableStream<Uint8Array> | null, max: number, timeoutMs: number): Promise<Uint8Array> {
   if (!body) throw new AiError('EMPTY_BODY', 'No image was received.');
@@ -59,16 +63,25 @@ export function createAiHandler(config: Config, deps: Dependencies) {
     const origin = req.headers.get('origin');
     const cors: Record<string, string> = { 'Cache-Control': 'no-store', 'Vary': 'Origin' };
     if (origin && config.origins.includes(origin)) cors['Access-Control-Allow-Origin'] = origin;
-    const json = (error: AiError) => new Response(JSON.stringify({ code: error.code, error: error.message, retryable: error.retryable }), { status: error.status, headers: { ...cors, 'Content-Type': 'application/json' } });
+    const json = (error: AiError) => new Response(JSON.stringify({ code: error.code, error: error.message, retryable: error.retryable, retry_after_seconds: error.retryAfterSeconds }), { status: error.status, headers: { ...cors, 'Content-Type': 'application/json' } });
     if (origin && !config.origins.includes(origin)) return json(new AiError('ORIGIN_DENIED', 'This site cannot use AI conversion.', 403));
-    if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: { ...cors, 'Access-Control-Allow-Headers': 'authorization,apikey,content-type,x-client-info', 'Access-Control-Allow-Methods': 'POST,OPTIONS' } });
-    if (req.method !== 'POST') return json(new AiError('METHOD', 'Use POST.', 405));
+    if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: { ...cors, 'Access-Control-Allow-Headers': 'authorization,apikey,content-type,x-client-info', 'Access-Control-Allow-Methods': 'POST,GET,OPTIONS' } });
+    if (req.method !== 'POST' && req.method !== 'GET') return json(new AiError('METHOD', 'Use POST or GET.', 405));
     let admitted: string | null = null, outcome: 'failed' | 'unknown' = 'failed';
     try {
       const authorization = req.headers.get('authorization') || '';
       if (!/^Bearer \S+$/i.test(authorization)) throw new AiError('AUTH_REQUIRED', 'Sign in to the wallpaper first.', 401);
       const user = await deps.authenticate(authorization.slice(7));
       if (!user) throw new AiError('AUTH_REQUIRED', 'Your session expired. Reopen the controller.', 401);
+      if (req.method === 'GET') {
+        const session = new URL(req.url).searchParams.get('session_id') || '';
+        if (!uuid.test(session)) throw new AiError('INVALID_REQUEST', 'Invalid wallpaper ID.');
+        let allowance: Allowance;
+        try { allowance = await deps.allowance({ user, session, event: config.event }); }
+        catch (e) { throw quotaError(e instanceof Error ? e.message : ''); }
+        if (allowance.status !== 'ready') return json(quotaError(allowance.code || '', allowance.retry_after_seconds));
+        return new Response(JSON.stringify({ available: true, remaining: allowance.remaining, attempts_remaining: allowance.attempts_remaining }), { headers: { ...cors, 'Content-Type': 'application/json' } });
+      }
       if (!config.openaiKey) throw new AiError('AI_UNAVAILABLE', 'AI conversion has not been configured.', 503);
       if (Number(req.headers.get('content-length')) > MAX_AI_UPLOAD + 65536) throw new AiError('IMAGE_TOO_LARGE', 'The image upload is too large.', 413);
       const type = req.headers.get('content-type') || '';
@@ -84,6 +97,7 @@ export function createAiHandler(config: Config, deps: Dependencies) {
       let reservation: Awaited<ReturnType<Dependencies['reserve']>>;
       try { reservation = await deps.reserve({ user, session, request, hash, model: config.model, event: config.event }); }
       catch (e) { throw quotaError(e instanceof Error ? e.message : ''); }
+      if (reservation.status === 'blocked') throw quotaError(reservation.code || '', reservation.retry_after_seconds);
       if (reservation.status !== 'admitted') throw new AiError('REQUEST_ALREADY_USED', reservation.status === 'succeeded'
         ? 'This request already completed. Use the cartoon preview, or Retry for a new conversion.'
         : 'This request is already recorded. It will not be submitted to OpenAI again.', 409, reservation.status === 'failed' || reservation.status === 'succeeded');

@@ -1,7 +1,6 @@
 import { db } from './backend';
-export class AiConversionError extends Error {
-  constructor(message: string, public retryable: boolean, public requestId: string, public ambiguous = false) { super(message); }
-}
+import { AiConversionError, allowanceResult, retryDelay, type AiAllowance } from './aiQuota';
+export { AiConversionError } from './aiQuota';
 // Use the full original composition at a useful AI resolution, not the tiny
 // 512×256 stamp. Browser decoding has already handled HEIC and EXIF orientation.
 export async function prepareAiUpload(image: HTMLImageElement): Promise<File> {
@@ -29,9 +28,23 @@ export async function convertAiPhoto(file: File, sessionId: string, requestId: s
   } catch { throw new AiConversionError('Connection lost. The conversion may still be running. Use the original photo for now.', false, requestId, true); }
   if (!response.ok) {
     const result = await response.json().catch(() => ({}));
-    throw new AiConversionError(typeof result.error === 'string' ? result.error : 'AI conversion is unavailable. Your original photo is still here.', result.retryable === true, requestId);
+    throw new AiConversionError(typeof result.error === 'string' ? result.error : 'AI conversion is unavailable. Your original photo is still here.', result.retryable === true, requestId, false, retryDelay(result.retry_after_seconds));
   }
   const blob = await response.blob();
   if (blob.type !== 'image/png' || blob.size > 8 * 1024 * 1024) throw new AiConversionError('The AI response was not a usable PNG.', false, requestId);
   return blob;
+}
+
+// This authenticated status request never reserves a job or contacts OpenAI.
+export async function getAiAllowance(sessionId: string): Promise<AiAllowance> {
+  if (!db) throw Error('The wallpaper is not connected.');
+  const { data, error } = await db.auth.getSession();
+  if (error || !data.session) return { available: false, message: 'Your session expired. Reopen the controller.', retryable: false };
+  const response = await fetch(import.meta.env.VITE_SUPABASE_URL + '/functions/v1/ai-stamp?session_id=' + encodeURIComponent(sessionId), {
+    headers: { Authorization: 'Bearer ' + data.session.access_token, apikey: import.meta.env.VITE_SUPABASE_ANON_KEY },
+    cache: 'no-store', signal: AbortSignal.timeout(10000),
+  });
+  const result = await response.json();
+  if (response.status >= 500 && result.code !== 'AI_EVENT_DISABLED') throw Error('Allowance check temporarily unavailable.');
+  return allowanceResult(result, response.ok);
 }
