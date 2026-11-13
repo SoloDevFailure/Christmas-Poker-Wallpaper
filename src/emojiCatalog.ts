@@ -1,5 +1,5 @@
 export type Emoji = { unicode: string; name: string; keywords: string; category: string };
-// A deliberately small, offline catalogue. Names and aliases are searchable;
+// Offline native emoji catalogue. Names and aliases are searchable;
 // Unicode sequences stay whole when handed to the existing PNG renderer.
 const groups: Record<string, string> = {
   'Smileys': `😀|grinning face|happy smile
@@ -83,7 +83,25 @@ const groups: Record<string, string> = {
 🤖|robot|machine
 😺|smiling cat|happy
 😻|heart eyes cat|love
-🙀|weary cat|shock`,
+🙀|weary cat|shock
+🫠|melting face|melt heat embarrassed
+🥲|smiling face with tear|happy sad grateful
+🥹|face holding back tears|emotional touched
+🫡|saluting face|salute respect
+🫢|face with open eyes and hand over mouth|shock surprise
+🫣|face with peeking eye|scared peek
+🫤|face with diagonal mouth|unsure disappointed
+🥱|yawning face|tired bored
+🤧|sneezing face|sick sneeze
+🤕|face with head bandage|hurt injured
+👺|goblin|tengu monster
+👾|alien monster|space invader game
+😸|grinning cat with smiling eyes|happy
+😹|cat with tears of joy|laugh lol
+😼|cat with wry smile|smirk
+😽|kissing cat|kiss
+😿|crying cat|sad
+😾|pouting cat|angry`,
   'People & gestures': `👋|waving hand|hello goodbye
 🤚|raised back of hand|stop
 ✋|raised hand|high five
@@ -136,7 +154,26 @@ const groups: Record<string, string> = {
 🧟|zombie|undead
 🕺|man dancing|party
 💃|woman dancing|party
-👑|crown|king queen winner`,
+👑|crown|king queen winner
+🫶|heart hands|love
+🫰|hand with index finger and thumb crossed|finger heart money
+🤏|pinching hand|small tiny
+🤜|right facing fist|fist bump
+🤛|left facing fist|fist bump
+🤲|palms up together|pray hands
+🖐️|hand with fingers splayed|high five
+👂|ear|listen hearing
+👃|nose|smell
+🦷|tooth|dentist
+🦴|bone|skeleton
+🧑|person|adult
+🧒|child|kid
+👧|girl|child
+👦|boy|child
+🧝|elf|christmas fantasy
+🧛|vampire|halloween
+🧞|genie|magic
+🧜|merperson|mermaid ocean`,
   'Animals & nature': `🐶|dog face|puppy
 🐱|cat face|kitten
 🐭|mouse face|animal
@@ -204,7 +241,39 @@ const groups: Record<string, string> = {
 ❄️|snowflake|winter christmas
 ☃️|snowman|winter christmas
 💧|droplet|water
-🌊|wave|ocean`,
+🌊|wave|ocean
+🦭|seal|ocean sea
+🦦|otter|animal
+🦥|sloth|slow animal
+🦔|hedgehog|animal
+🦇|bat|halloween animal
+🐺|wolf|animal
+🦝|raccoon|animal
+🐴|horse face|racing
+🫎|moose|animal
+🫏|donkey|animal
+🐐|goat|greatest
+🐖|pig|animal
+🐄|cow|animal
+🐘|elephant|animal
+🦒|giraffe|animal
+🦓|zebra|animal
+🦏|rhinoceros|rhino animal
+🦛|hippopotamus|hippo animal
+🐡|blowfish|puffer fish sea
+🪼|jellyfish|ocean sea
+🦞|lobster|seafood
+🦐|shrimp|prawn seafood
+🪸|coral|ocean reef
+🌺|hibiscus|flower tropical
+🌸|cherry blossom|flower
+🌷|tulip|flower
+🍄|mushroom|fungus
+☁️|cloud|weather
+🌧️|cloud with rain|weather
+🌪️|tornado|storm weather
+🌍|globe showing Europe Africa|earth world
+🌏|globe showing Asia Australia|earth world`,
   'Food & drink': `🍏|green apple|fruit
 🍎|red apple|fruit
 🍐|pear|fruit
@@ -264,7 +333,33 @@ const groups: Record<string, string> = {
 🍹|tropical drink|daiquiri cocktail
 🍾|bottle with popping cork|champagne party
 🥤|cup with straw|soft drink soda
-🧊|ice cube|cold`,
+🧊|ice cube|cold
+🥭|mango|fruit
+🥝|kiwi fruit|fruit
+🫐|blueberries|fruit
+🍅|tomato|vegetable
+🥦|broccoli|vegetable
+🧄|garlic|food
+🧅|onion|food
+🥨|pretzel|snack
+🥞|pancakes|breakfast
+🧇|waffle|breakfast
+🥪|sandwich|lunch
+🥙|stuffed flatbread|kebab pita
+🍛|curry rice|dinner
+🍚|cooked rice|food
+🥟|dumpling|food
+🦪|oyster|seafood
+🍧|shaved ice|dessert
+🍨|ice cream bowl|dessert
+🥛|glass of milk|drink
+🫖|teapot|tea drink
+🧋|bubble tea|boba drink
+🧃|beverage box|juice drink
+🧉|mate|drink
+🍶|sake|japanese drink
+🧂|salt|seasoning
+🍽️|fork and knife with plate|dinner`,
   'Activities': `⚽|soccer ball|football sport
 🏀|basketball|sport
 🏈|american football|sport
@@ -307,7 +402,26 @@ const groups: Record<string, string> = {
 🎁|wrapped gift|present christmas
 🎀|ribbon|gift
 🎆|fireworks|celebrate
-🧨|firecracker|bang`,
+🧨|firecracker|bang
+🀄|mahjong red dragon|tile game
+🎴|flower playing cards|cards game
+🧩|puzzle piece|jigsaw game
+♟️|chess pawn|game
+🪀|yo yo|toy game
+🪁|kite|toy
+🛹|skateboard|sport
+🛼|roller skate|sport
+🎿|skis|snow sport
+🛷|sled|snow christmas
+🏒|ice hockey|sport
+🥋|martial arts uniform|karate judo
+🏋️|person lifting weights|gym weightlifting
+🤺|person fencing|sword sport
+🪩|mirror ball|disco party
+🎺|trumpet|music
+🎷|saxophone|music
+🪕|banjo|music
+🎻|violin|music`,
   'Travel & objects': `🚗|car|drive vehicle
 🚕|taxi|cab
 🚌|bus|transport
@@ -372,7 +486,60 @@ const groups: Record<string, string> = {
 💊|pill|medicine
 💉|syringe|needle
 🧲|magnet|attract
-🧯|fire extinguisher|safety`,
+🧯|fire extinguisher|safety
+🚬|cigarette|cig cigarettes ciggy ciggies smoke smoking tobacco dart durries
+🕶️|sunglasses|sunnies shades glasses cool eyewear
+👓|glasses|spectacles eyewear
+🥽|goggles|eye protection
+🧢|billed cap|hat baseball
+🎩|top hat|fancy magician
+👒|woman hat|sun hat
+👔|necktie|tie suit
+👕|t shirt|shirt clothes
+👗|dress|clothes
+👙|bikini|swimwear
+👠|high heeled shoe|heels
+👟|running shoe|sneakers trainers
+🩴|thong sandal|flip flops footwear
+🎒|backpack|bag
+👜|handbag|purse bag
+☂️|umbrella|rain
+🛵|motor scooter|vehicle
+🛻|pickup truck|ute vehicle
+🚂|locomotive|train
+🚆|train|railway
+🛶|canoe|boat kayak
+🛩️|small airplane|plane flight
+🏡|house with garden|home
+🏢|office building|work
+🏨|hotel|holiday
+🏥|hospital|medical
+🛟|ring buoy|life saving
+🧳|luggage|suitcase travel
+🎃|jack o lantern|pumpkin halloween
+🪦|headstone|grave cemetery
+⚰️|coffin|funeral
+🧹|broom|clean witch
+🪣|bucket|clean
+🪥|toothbrush|dental
+🧼|soap|clean
+🧽|sponge|clean
+🧴|lotion bottle|sunscreen
+🧷|safety pin|fastener
+✂️|scissors|cut
+📎|paperclip|stationery
+📌|pushpin|pin
+📦|package|box delivery
+✉️|envelope|mail letter
+💌|love letter|valentine
+🔗|link|chain
+⚙️|gear|settings machine
+⚖️|balance scale|justice
+💣|bomb|explosion
+🪓|axe|tool
+⛏️|pick|tool mining
+🛠️|hammer and wrench|tools
+🪵|wood|timber log`,
   'Symbols & flags': `❤️|red heart|love
 🧡|orange heart|love
 💛|yellow heart|love
@@ -423,7 +590,46 @@ const groups: Record<string, string> = {
 🇫🇷|France flag|french
 🇩🇪|Germany flag|german
 🇮🇹|Italy flag|italian
-🇯🇵|Japan flag|japanese`,
+🇯🇵|Japan flag|japanese
+🩷|pink heart|love
+🩵|light blue heart|love
+🩶|grey heart|gray love
+❣️|heart exclamation|love
+💞|revolving hearts|love
+💓|beating heart|love
+💗|growing heart|love
+💝|heart with ribbon|gift love
+💟|heart decoration|love
+🚭|no smoking|cigarette prohibited
+☢️|radioactive|radiation danger
+☣️|biohazard|danger
+⚜️|fleur de lis|symbol
+🔱|trident emblem|symbol
+⭕|hollow red circle|ring
+🔴|red circle|shape
+🟠|orange circle|shape
+🟡|yellow circle|shape
+🟢|green circle|shape
+🔵|blue circle|shape
+🟣|purple circle|shape
+⚫|black circle|shape
+⚪|white circle|shape
+🔶|large orange diamond|shape
+🔷|large blue diamond|shape
+➡️|right arrow|direction
+⬅️|left arrow|direction
+⬆️|up arrow|direction
+⬇️|down arrow|direction
+🔄|counterclockwise arrows button|refresh repeat
+🔊|speaker high volume|sound loud
+🔇|muted speaker|sound mute
+🏳️‍⚧️|transgender flag|pride
+🇿🇦|South Africa flag|south african
+🇪🇸|Spain flag|spanish
+🇧🇷|Brazil flag|brazilian
+🇮🇳|India flag|indian
+🇨🇳|China flag|chinese
+🇰🇷|South Korea flag|korean`,
 };
 export const emojiCategories = Object.keys(groups);
 export const emojis: Emoji[] = Object.entries(groups).flatMap(([category, rows]) => rows.split('\n').map(row => {
