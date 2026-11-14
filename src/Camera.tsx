@@ -169,7 +169,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
         const observer = new ResizeObserver(resized);
         if (view.current)
             observer.observe(view.current);
-        const visibility = () => { if(stopped)return;epoch.current++; invalidate('Finding markers…','visibility-changed',true); };
+        const visibility = () => { if(stopped)return;health.problem(performance.now(),false,true);epoch.current++; invalidate('Finding markers…','visibility-changed',true); };
         document.addEventListener('visibilitychange', visibility);
         function cleanup(){if(stopped)return;stopped=true;epoch.current++;observer.disconnect();document.removeEventListener('visibilitychange',visibility);clearTimeout(timer);clearTimeout(badgeTimer);clearTimeout(startupTimer);clearInterval(watchdog);gate.cancel();if(videoCallback!==undefined)pipelineVideo?.cancelVideoFrameCallback?.(videoCallback);worker?.terminate();stream?.getTracks().forEach(t=>t.stop());if(pipelineVideo&&pipelineVideo.srcObject===stream){pipelineVideo.pause();pipelineVideo.srcObject=null;}live.current=false;poseRef.current=null;tracking.reject('camera-stopped',performance.now(),true);latest.current.onPlacement(null);}
         stopPipeline.current=cleanup;
