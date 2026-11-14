@@ -122,3 +122,9 @@ The transparent 1280 × 720 sheet uses a checkerboard. Portrait starts with a cl
 Camera capture/detection pauses while the editor covers placement, retaining the mounted camera and selected placement mode/transform. Closing Draw resumes fresh tracking; the usual safe tracking policy still gates stamping. No Supabase migration, storage bucket or additional dependency is required. Drawings use the existing image fields, realtime, persistence and wallpaper export paths.
 
 Validation: `npm test` covers alpha bounds, size fallback, fill, history, extra pointers and view transforms. The production-browser harness in `tests/browser-modes.fixture.tsx` supports `?drawing` for real Canvas/PNG tools, camera recovery and camera/manual submissions using a synthetic marker-camera feed. Physical iPhone Safari/Android Chrome checks are still required for keyboard/safe-area behaviour, finger/capacitive-stylus stroke feel, orientation changes with active text, and a real multiplayer saved-stamp/export round trip.
+
+## Personal stamp library and camera recovery
+
+The phone's **My Stamps** gallery privately saves accepted AI cartoons, photos, completed drawings and custom text. Reuse never generates another image. Refresh/QR recovery uses the same anonymous Supabase browser profile; clearing site data or changing browser/device loses that identity. **Reset Tracking** restarts only the camera/detector lifecycle and retains selected artwork and transforms.
+
+Deploy the additive personal_stamp_library migration and the authenticated stamp-library Edge Function before the updated frontend. See [personal-library deployment, ownership, limits and recovery details](docs/STAMP_LIBRARY.md). No AI model, quota or budget changes are needed.

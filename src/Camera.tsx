@@ -6,6 +6,8 @@ import { stampSource } from './art';
 import {screenArtworkStyle} from './screenArtwork';
 import {PhoneGesture} from './phoneGesture';
 import TrackingDebug from './TrackingDebugger';
+import {CameraHealth} from './cameraHealth';
+import {readCameraSettings,writeCameraSettings} from './artworkRecovery';
 import {emptyDebug,frameMarkerDecisions,type DebugSnapshot} from './trackingDebug';
 import {TrackingState,processingFrame,FRAME_PAUSE,FrameGate} from './trackingState';
 import { phoneFixedPlacement,screenStampFromWorld,smoothTracking,trackingMotion,phoneReference,type CameraHandle,type ScreenStamp } from './cameraPlacement';
@@ -20,6 +22,8 @@ type Pose = {
     error: number;
 };
 type Props = {
+    recoveryKey?:string;
+    onManual?:()=>void;
     placement: Placement;
     onPlacement: (p: Placement | null, at?: number, validUntil?:number) => void;
     onStatus: (s: string) => void;
@@ -45,10 +49,15 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
     const [status, setStatus] = useState('Opening camera…'), [phase, setPhase] = useState('lost'), [metrics, setMetrics] = useState<Record<string,unknown>>({});
     const debugSnapshot=useRef<DebugSnapshot>({...emptyDebug}),[debugView,setDebugView]=useState<DebugSnapshot>({...emptyDebug}),[debugNow,setDebugNow]=useState(0);
     useEffect(()=>{if(!props.trackingDebug)return;const refresh=()=>{setDebugView({...debugSnapshot.current});setDebugNow(performance.now());};refresh();const timer=setInterval(refresh,125);return()=>clearInterval(timer);},[props.trackingDebug]);
-    const [displayZoom,setDisplayZoom]=useState<1|2>(2);
-    const zoomRef=useRef<1|2>(2);
-    const phoneControls=useRef({size:.56,rotation:0}),phoneGesture=useRef<{base:{size:number;rotation:number};points:Point[]}|null>(null),precision=useRef<ScreenStamp|null>(null);
+    const recovered=useRef(readCameraSettings(props.recoveryKey)).current;
+    const [restart,setRestart]=useState(0),[restarting,setRestarting]=useState(true),[cameraFault,setCameraFault]=useState('');
+    const restartLock=useRef(true),stopPipeline=useRef<()=>void>(()=>{});
+    const [displayZoom,setDisplayZoom]=useState<1|2>(recovered?.zoom||2);
+    const zoomRef=useRef<1|2>(recovered?.zoom||2);
+    const phoneControls=useRef({size:recovered?.size??.56,rotation:recovered?.rotation??0}),phoneGesture=useRef<{base:{size:number;rotation:number};points:Point[]}|null>(null),precision=useRef<ScreenStamp|null>(null);
     const centredGesture=useRef(new PhoneGesture()).current;
+    useEffect(()=>{const save=()=>writeCameraSettings(latest.current.recoveryKey,{...phoneControls.current,zoom:zoomRef.current});const timer=setInterval(save,750);window.addEventListener('pagehide',save);return()=>{save();clearInterval(timer);window.removeEventListener('pagehide',save);};},[]);
+    function resetTracking(){if(restartLock.current||props.disabled)return;restartLock.current=true;stopPipeline.current();setRestarting(true);setCameraFault('');setStatus('Restarting camera…');setRestart(n=>n+1);}
     function paintArtwork(){
         if(latest.current.mode!=='camera-stamp'||paintFrame.current!==null)return;
         paintFrame.current=requestAnimationFrame(()=>{paintFrame.current=null;const image=sticker.current;if(image&&latest.current.mode==='camera-stamp')Object.assign(image.style,screenArtworkStyle(latest.current.placement,phoneControls.current,visual.current.reference));});
@@ -68,7 +77,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
         return lastReliable.current;
     }
     function sample(){
-        if(latest.current.processingPaused)return null;
+        if(restartLock.current||latest.current.processingPaused)return null;
         const p=poseRef.current,frozen=frozenPlacement(),state=tracking.read(performance.now());
         if(!p||!frozen||!state.stampable)return null;
         let placement={...frozen};
@@ -110,8 +119,11 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
         }
     }, [props.aimReset]);
     useEffect(() => {
+        epoch.current++;poseRef.current=null;lastReliable.current=null;live.current=false;tracking.reject('camera-restarting',performance.now(),true);latest.current.onPlacement(null);setPose(null);setPhase('lost');cancelPrecision();pointers.current.clear();gesture.current=null;phoneGesture.current=null;centredGesture.clear();
+        const health=new CameraHealth(performance.now());
         let terminalError: string | null = null;
         let stopped = false, stream: MediaStream | undefined, worker: Worker | undefined, timer: ReturnType<typeof setTimeout>, watchdog: ReturnType<typeof setInterval>, last = performance.now();
+        const pipelineVideo=video.current;
         const canvas = document.createElement('canvas'), ctx = canvas.getContext('2d', { willReadFrequently: true });
         let badgeTimer:ReturnType<typeof setTimeout>|undefined,badgeHeld=false;
         // Cosmetic debounce only: grace/frozen placement take effect immediately.
@@ -143,6 +155,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
             reportedPhase=state.phase;diagnostics();
         };
         const resized = () => {
+            if(stopped)return;
             if (terminalError) {
                 report(terminalError, 'lost');
                 return;
@@ -156,8 +169,12 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
         const observer = new ResizeObserver(resized);
         if (view.current)
             observer.observe(view.current);
-        const visibility = () => { epoch.current++; invalidate('Finding markers…','visibility-changed',true); };
+        const visibility = () => { if(stopped)return;epoch.current++; invalidate('Finding markers…','visibility-changed',true); };
         document.addEventListener('visibilitychange', visibility);
+        function cleanup(){if(stopped)return;stopped=true;epoch.current++;observer.disconnect();document.removeEventListener('visibilitychange',visibility);clearTimeout(timer);clearTimeout(badgeTimer);clearTimeout(startupTimer);clearInterval(watchdog);gate.cancel();if(videoCallback!==undefined)pipelineVideo?.cancelVideoFrameCallback?.(videoCallback);worker?.terminate();stream?.getTracks().forEach(t=>t.stop());if(pipelineVideo&&pipelineVideo.srcObject===stream){pipelineVideo.pause();pipelineVideo.srcObject=null;}live.current=false;poseRef.current=null;tracking.reject('camera-stopped',performance.now(),true);latest.current.onPlacement(null);}
+        stopPipeline.current=cleanup;
+        function failed(message:string){if(stopped)return;terminalError=message;invalidate(message+' Use Reset Tracking or Manual.','camera-stalled',true);cleanup();restartLock.current=false;setRestarting(false);setCameraFault(message);}
+        const startupTimer=setTimeout(()=>failed('The camera did not finish starting.'),15000);
         async function start() {
             try {
                 if (!window.isSecureContext)
@@ -172,6 +189,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                     return;
                 }
                 const v = video.current!;
+                stream.getVideoTracks().forEach(track=>track.addEventListener('ended',()=>failed('The camera stream stopped.'),{once:true}));
                 v.srcObject = stream;
                 await v.play();
                 if (stopped)
@@ -201,6 +219,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                     if(id===null){lastFrame={...lastFrame,acquisition:'skipped: duplicate or busy'};diagnostics();schedule();return;}
                     // Timestamp before pixel readback, using the presented-frame clock
                     // when available. Worker timings are durations, never cross-context clocks.
+                    health.begin(performance.now());
                     const captureStarted=performance.now(),at=meta?Math.min(captureStarted,meta.presentationTime):captureStarted;
                     const frameEpoch=epoch.current,captureWidth=v.videoWidth,captureHeight=v.videoHeight;
                     try{
@@ -222,16 +241,17 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                         worker!.postMessage({buffer:data.data.buffer,width:canvas.width,height:canvas.height,at,epoch:frameEpoch,id,captureMs,resizeMs,drawMs,pixelsMs,captureWidth,captureHeight,capturePath:'main-thread fallback',trackingDebug:latest.current.trackingDebug,aim:latest.current.mode==='legacy'?{x:canvas.width*(.5+latest.current.calibration.x),y:canvas.height*(.5+latest.current.calibration.y)}:undefined},[data.data.buffer]);
                         }
                         lastFrame={...lastFrame,acquisition:'processing frame '+id};if(latest.current.trackingDebug)debugSnapshot.current={...debugSnapshot.current,acquisition:'processing frame '+id};
-                    }catch(e){gate.cancel();lastFrame={...lastFrame,acquisition:'unavailable: pixel readback'};invalidate(e instanceof Error?e.message:'Camera readback failed','capture-failure');schedule();}
+                    }catch(e){if(stopped)return;health.failure();gate.cancel();lastFrame={...lastFrame,acquisition:'unavailable: pixel readback'};invalidate(e instanceof Error?e.message:'Camera readback failed','capture-failure');schedule();}
                 };
-                worker.onerror = () => { terminalError = 'Camera tracking failed · use Options to retry or place manually'; invalidate(terminalError,'worker-error',true); };
+                worker.onerror = () => failed('Camera tracking failed.');
                 worker.onmessage = ({ data }) => {
                     if (stopped)
                         return;
-                    if(data.type==='ready'){workerCapture=!!data.bitmapCapture&&typeof createImageBitmap==='function';schedule();return;}
+                    if(data.type==='ready'){clearTimeout(startupTimer);restartLock.current=false;setRestarting(false);health.complete(false,performance.now());workerCapture=!!data.bitmapCapture&&typeof createImageBitmap==='function';schedule();return;}
                     if(data.captureFallback)workerCapture=false;
                     if(!gate.finish(data.id))return; // Ignore unsolicited/late replies; never queue concurrent detection.
                     if(latest.current.processingPaused){schedule();return;}
+                    health.complete(data.reason==='capture-failure',performance.now());
                     const now = performance.now(), fps = 1000 / (now - last);
                     last = now;
                     const found = data.found || [], detected = markers.filter(m => found.some((f: {
@@ -278,7 +298,10 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                     schedule();
                 };
                 watchdog = setInterval(()=>{
-                    const state=tracking.read(performance.now());
+                    const now=performance.now();health.video(v.currentTime,now);
+                    const problem=health.problem(now,document.visibilityState==='visible',!!latest.current.processingPaused||(!workerCapture&&latest.current.mode==='camera-stamp'&&centredGesture.active),stream?.getVideoTracks().some(t=>t.readyState==='ended'));
+                    if(problem){failed(problem);return;}
+                    const state=tracking.read(now);
                     if(live.current&&state.phase!=='locked')invalidate('Waiting for a fresh tracking result','stale-frame');
                     else if(!live.current&&state.phase!==reportedPhase)invalidate('Tracking lost · show 3 markers',tracking.reason||'tracking-timeout');
                 },40);
@@ -288,14 +311,13 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
                 if (!stopped) {
                     live.current = false;
                     latest.current.onPlacement(null);
-                    terminalError = e instanceof Error ? e.message : String(e);
-                    invalidate(terminalError,'camera-error',true);
+                    failed(e instanceof Error?e.message:String(e));
                 }
             }
         }
         void start();
-        return () => { stopped = true; observer.disconnect(); document.removeEventListener('visibilitychange', visibility); clearTimeout(timer); clearTimeout(badgeTimer); clearInterval(watchdog); gate.cancel();if(videoCallback!==undefined)video.current?.cancelVideoFrameCallback?.(videoCallback);worker?.terminate(); stream?.getTracks().forEach(t => t.stop()); live.current = false; latest.current.onPlacement(null); };
-    }, []);
+        return cleanup;
+    }, [restart]);
     function toggleDisplayZoom() {
         // Freeze the current wallpaper transform, never scale the stamp itself.
         // Both the display and inverse touch mapping use the same centred crop.
@@ -361,7 +383,7 @@ export default forwardRef<CameraHandle,Props>(function Camera(props,ref) {
       {props.trackingDebug&&<TrackingDebug snapshot={video.current?.videoWidth&&debugView.width&&Math.abs(debugView.width/debugView.height-video.current.videoWidth/video.current.videoHeight)>.01?{...debugView,draw:false}:debugView} now={debugNow} width={size.width} height={size.height} zoom={displayZoom}/>}
     </div>
     <button className="display-zoom" aria-label="Display zoom" aria-pressed={displayZoom===2} title="Relative display zoom; tracking uses the full frame" disabled={props.disabled} onClick={toggleDisplayZoom}>{displayZoom}×</button>
-    <p className={'tracking-status ' + phase} role="status">{status}</p>
+    <div className={'tracking-recovery'+(cameraFault?' stalled':'')}><p className={'tracking-status ' + phase} role="status">{status}</p><button disabled={restarting||props.disabled} onClick={resetTracking}>{restarting?'Restarting camera…':'Reset Tracking'}</button>{props.onManual&&<button disabled={props.disabled} onClick={props.onManual}>Manual</button>}</div>
 
   </>;
 });

@@ -5,7 +5,7 @@ import { AiConversionError, convertAiPhoto, getAiAllowance, prepareAiUpload } fr
 import { waitMessage } from './aiQuota';
 import type { CustomAsset } from './customStamp';
 
-export default function PhotoPreparation({ file, onCancel, onFinish, sessionId, convert = convertAiPhoto, allowance = getAiAllowance }: { file: File; onCancel: () => void; onFinish: (asset: CustomAsset) => void; sessionId?: string; convert?: typeof convertAiPhoto; allowance?: typeof getAiAllowance }) {
+export default function PhotoPreparation({ file, onCancel, onFinish, sessionId, convert = convertAiPhoto, allowance = getAiAllowance }: { file: File; onCancel: () => void; onFinish: (asset: CustomAsset,kind?: 'ai'|'photo') => void; sessionId?: string; convert?: typeof convertAiPhoto; allowance?: typeof getAiAllowance }) {
   const [photo, setPhoto] = useState<DecodedPhoto | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [cartoon, setCartoon] = useState<DecodedPhoto | null>(null), [progress, setProgress] = useState(''), [retryable, setRetryable] = useState(true), [attempted, setAttempted] = useState(false);
   const [blockedUntil, setBlockedUntil] = useState(0), [clock, setClock] = useState(Date.now);
@@ -54,7 +54,7 @@ export default function PhotoPreparation({ file, onCancel, onFinish, sessionId, 
     working.current = true; setBusy(true); setError('');
     try {
       const asset = await preparePhoto(selected.image);
-      if (active.current) onFinish(asset);
+      if (active.current) onFinish(asset,useAi?'ai':'photo');
     } catch (e) { if (active.current) setError(e instanceof Error ? e.message : String(e)); }
     finally { working.current = false; if (active.current) setBusy(false); }
   }

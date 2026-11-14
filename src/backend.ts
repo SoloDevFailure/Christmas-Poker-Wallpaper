@@ -3,7 +3,9 @@ import { validPlacement, type Placement, type Session, type Stamp } from './type
 import { confirmedDuplicate, type UndoState } from './stampUndo';
 const url = import.meta.env.VITE_SUPABASE_URL, key = import.meta.env.VITE_SUPABASE_ANON_KEY;
 export const db = url && key && !url.includes('YOUR_PROJECT') ? createClient(url, key) : null;
-export async function identity() {
+let identityFlight:Promise<string>|null=null;
+export function identity():Promise<string>{if(!identityFlight)identityFlight=restoreIdentity().finally(()=>{identityFlight=null;});return identityFlight;}
+async function restoreIdentity() {
     if (!db)
         throw Error('Configure Supabase in .env.local first.');
     const { data, error } = await db.auth.getSession();
